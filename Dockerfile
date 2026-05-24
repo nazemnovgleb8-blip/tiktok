@@ -19,7 +19,6 @@ WORKDIR /app
 # явном изменении версии playwright здесь.
 RUN pip install playwright==1.49.1
 RUN playwright install chromium
-RUN playwright install-deps chromium
 
 # ── Остальные зависимости ─────────────────────────────────────────────────────
 COPY requirements.txt .
