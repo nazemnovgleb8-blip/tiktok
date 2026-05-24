@@ -920,12 +920,28 @@ async def run_scan(cfg: dict,
         log(f"📅 Все {len(with_ts)} видео с датой — свежие ≤{max_age_days} дн  |  "
             f"без даты: {len(no_ts)}")
 
-    result = [v for v in date_filtered if v["score"] >= min_score]
+    viral_score = 50  # score≥50 сохраняем всегда, независимо от даты
+
+    # Свежие видео (≤14 дн) с базовым порогом
+    fresh_filtered = [v for v in date_filtered if v["score"] >= min_score]
+
+    # Старые видео (>14 дн) но вирусные (score≥50) — нельзя терять
+    fresh_urls = {v["url"] for v in fresh_filtered}
+    viral_old  = [
+        v for v in with_ts
+        if v["score"] >= viral_score
+        and v["video_created_at"] < week_ago_ts
+        and v["url"] not in fresh_urls
+    ]
+
+    result = fresh_filtered + viral_old
     result.sort(key=lambda x: x["score"], reverse=True)
 
     log(f"\n✅ Сканирование завершено.")
     log(f"   Всего уникальных новых: {len(all_videos)}")
     log(f"   После фильтра по дате: {len(date_filtered)}")
-    log(f"   С Score≥{min_score}: {len(result)}")
+    log(f"   С Score≥{min_score} (≤{max_age_days} дн): {len(fresh_filtered)}")
+    if viral_old:
+        log(f"   Вирусных Score≥{viral_score} (старше {max_age_days} дн): {len(viral_old)} — сохранены")
 
     return all_videos, result
