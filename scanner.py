@@ -1,7 +1,7 @@
 """
 scanner.py — TikTok scraper
 Источники: хэштеги, поиск по словам, подписки seed-аккаунтов
-Фильтры: Score, дата публикации (7 дней), дедупликация между сканами
+Фильтры: Score, дата публикации (14 дней), дедупликация между сканами
 """
 import asyncio
 import os
@@ -53,7 +53,15 @@ def _parse_item(item: dict, source: str) -> dict | None:
         author     = (author_obj.get("uniqueId") or author_obj.get("unique_id")
                       or item.get("uniqueId", ""))
         vid_id     = str(item.get("id") or item.get("aweme_id") or "")
-        create_ts  = int(item.get("createTime") or item.get("create_time") or 0)
+        create_ts  = int(
+            item.get("createTime")
+            or item.get("create_time")
+            or item.get("createtime")
+            or item.get("video", {}).get("createTime")
+            or item.get("video", {}).get("create_time")
+            or (item.get("desc_info") or {}).get("create_time")
+            or 0
+        )
 
         if not (play and author and vid_id):
             return None
@@ -193,7 +201,8 @@ async def _scroll_and_collect(page, url: str, source: str,
                                cfg: dict = None,
                                is_search: bool = False,
                                is_hashtag: bool = False,
-                               week_ago_ts: int = 0) -> list:
+                               week_ago_ts: int = 0,
+                               max_old_streak: int = 2) -> list:
     """
     Открывает URL, скроллит пока не наберёт target видео.
     is_search=True  — кликает вкладку Videos.
@@ -271,11 +280,18 @@ async def _scroll_and_collect(page, url: str, source: str,
                     with_ts = [v for v in new_batch if v.get("video_created_at", 0) > 0]
                     if with_ts:
                         recent = [v for v in with_ts if v["video_created_at"] >= week_ago_ts]
+                        old_ratio = 1 - len(recent) / len(with_ts)
                         if not recent:
                             old_streak += 1
-                            logger.debug(f"  Пачка #{_}: все {len(with_ts)} видео старше {cfg.get('max_age_days', 7)} дн")
-                            if old_streak >= 2:
-                                logger.info(f"  Ранняя остановка: 2 пачки подряд без свежих видео")
+                            logger.debug(
+                                f"  Пачка: все {len(with_ts)} видео старше "
+                                f"{cfg.get('max_age_days', 14)} дн  "
+                                f"(streak={old_streak}/{max_old_streak})"
+                            )
+                            if old_streak >= max_old_streak:
+                                logger.info(
+                                    f"  Ранняя остановка: {max_old_streak} пачки подряд без свежих видео"
+                                )
                                 break
                         else:
                             old_streak = 0
@@ -466,7 +482,7 @@ async def run_scan(cfg: dict,
     log(f"📋 Известных URL в БД (30 дн): {len(known_urls)} — пропускаем повторы")
 
     # ── Порог по дате ─────────────────────────────────────────────────────────
-    max_age_days = cfg.get("max_age_days", 7)
+    max_age_days = cfg.get("max_age_days", 14)
     week_ago_ts  = int((datetime.now() - timedelta(days=max_age_days)).timestamp())
     log(f"📅 Фильтр по дате: не старше {max_age_days} дней")
 
@@ -602,13 +618,14 @@ async def run_scan(cfg: dict,
 
         # ── 2. Поиск (с фильтром по дате — последняя неделя) ──────────────────
         if not blocked:
-            log(f"\n[2/4] Поиск ({len(cfg['search_queries'])} запросов, за 7 дней)...")
+            log(f"\n[2/4] Поиск ({len(cfg['search_queries'])} запросов, за {max_age_days} дней)...")
             for query in cfg["search_queries"]:
                 log(f"  \"{query}\"...")
-                # publish_time=1 → неделя; TikTok поддерживает: 1=день, 7=неделя, 30=месяц
+                # publish_time: 1=день, 7=неделя, 30=месяц
+                # Используем 30 (максимальный фильтр TikTok), финальный обрез — max_age_days
                 q = quote_plus(query)
                 search_url = (
-                    f"https://www.tiktok.com/search/video?q={q}&publish_time=7"
+                    f"https://www.tiktok.com/search/video?q={q}&publish_time=30"
                 )
                 videos = await _scroll_and_collect(
                     page, search_url,
@@ -761,7 +778,8 @@ async def run_scan(cfg: dict,
             videos = await _scroll_and_collect(
                 page, f"https://www.tiktok.com/@{acc}",
                 source=f"account:{acc}", target=25, cfg=cfg,
-                week_ago_ts=week_ago_ts  # останавливаемся когда видео становятся старыми
+                week_ago_ts=week_ago_ts,
+                max_old_streak=1,  # для аккаунтов: 1 батч старых = уходим сразу
             )
             new = add(videos)
             log(f"  @{acc} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
@@ -780,14 +798,17 @@ async def run_scan(cfg: dict,
 
     # Фильтр по дате: оставляем только видео <= max_age_days дней
     # (video_created_at == 0 — дата неизвестна, пропускаем этот фильтр)
-    date_filtered = [
-        v for v in all_videos
-        if v.get("video_created_at", 0) == 0
-        or v["video_created_at"] >= week_ago_ts
-    ]
-    date_dropped = len(all_videos) - len(date_filtered)
-    if date_dropped:
-        log(f"📅 Отфильтровано по дате (>{max_age_days} дн): {date_dropped} видео")
+    no_ts   = [v for v in all_videos if v.get("video_created_at", 0) == 0]
+    with_ts = [v for v in all_videos if v.get("video_created_at", 0) > 0]
+    fresh   = [v for v in with_ts if v["video_created_at"] >= week_ago_ts]
+    old_cnt = len(with_ts) - len(fresh)
+    date_filtered = fresh + no_ts   # без даты — берём (не можем знать)
+    if old_cnt:
+        log(f"📅 Отфильтровано по дате (>{max_age_days} дн): {old_cnt} видео  |  "
+            f"без даты (API не вернул): {len(no_ts)}")
+    else:
+        log(f"📅 Все {len(with_ts)} видео с датой — свежие ≤{max_age_days} дн  |  "
+            f"без даты: {len(no_ts)}")
 
     result = [v for v in date_filtered if v["score"] >= min_score]
     result.sort(key=lambda x: x["score"], reverse=True)

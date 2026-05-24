@@ -133,6 +133,10 @@ def run_full_scan(need_login: bool = False):
 
         logger.info(f"══ Скан #{scan_id} завершён успешно ══")
 
+        # Авто-пуш в GitHub (только локально, не на Railway)
+        if not os.environ.get("RAILWAY_ENVIRONMENT"):
+            _git_push()
+
     except Exception as e:
         logger.exception(f"Ошибка скана #{scan_id}: {e}")
         db.fail_scan(scan_id, str(e))
@@ -366,6 +370,29 @@ def _run_analyze_only(cfg: dict):
 
     except Exception as e:
         logger.exception(f"Ошибка анализа: {e}")
+
+
+def _git_push():
+    """Авто-пуш изменений в GitHub после скана — Railway задеплоится автоматически."""
+    import subprocess
+    try:
+        dir_ = os.path.dirname(os.path.abspath(__file__))
+        subprocess.run(["git", "-C", dir_, "add", "-A"], timeout=30, check=False)
+        subprocess.run(
+            ["git", "-C", dir_, "commit", "-m",
+             f"auto: скан завершён {datetime.now().strftime('%d.%m %H:%M')}"],
+            timeout=30, check=False
+        )
+        result = subprocess.run(
+            ["git", "-C", dir_, "push"],
+            timeout=60, check=False, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            logger.info("✅ Изменения запушены в GitHub — Railway задеплоится автоматически")
+        else:
+            logger.warning(f"Git push не удался: {result.stderr[:200]}")
+    except Exception as e:
+        logger.warning(f"Авто-пуш не удался: {e}")
 
 
 def _keep_alive(scheduler=None):
