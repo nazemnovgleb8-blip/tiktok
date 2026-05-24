@@ -666,7 +666,11 @@ details[open] > summary { margin-bottom:20px }
         <h2 style="margin:0;font-size:17px">Прокси и браузер</h2>
       </summary>
       <div class="form-row">
-        <label>Bright Data CDP URL <span style="color:#1a7a3c;font-size:11px">— удалённый браузер с авто-капчей</span></label>
+        <label>SadCaptcha API Key <span style="color:#1a7a3c;font-size:11px">— авто-капча TikTok (rotation, puzzle, 3D) · sadcaptcha.com</span></label>
+        <input type="password" name="sadcaptcha_api_key" value="{{ cfg.get('sadcaptcha_api_key','') }}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+      </div>
+      <div class="form-row">
+        <label>Bright Data CDP URL <span style="color:#6e6e73;font-size:11px">— если SadCaptcha не задан</span></label>
         <input type="password" name="brightdata_cdp_url" value="{{ cfg.get('brightdata_cdp_url','') }}" placeholder="wss://brd-customer-...@brd.superproxy.io:9222">
       </div>
       <div class="form-row">
@@ -916,6 +920,7 @@ def _apply_settings_from_form(form):
     c["gemini_top_n"]       = int(form.get("gemini_top_n", 50))
     c["min_score"]          = int(form.get("min_score", 10))
     c["min_views"]          = int(form.get("min_views", 50000))
+    c["sadcaptcha_api_key"] = form.get("sadcaptcha_api_key", "").strip()
     c["capsolver_api_key"]  = form.get("capsolver_api_key", "")
     c["brightdata_cdp_url"] = form.get("brightdata_cdp_url", "").strip()
     dashboard_url = form.get("dashboard_url", "").strip()

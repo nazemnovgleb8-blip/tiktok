@@ -362,7 +362,49 @@ async def _build_context(p, cfg: dict) -> tuple:
     if proxy:
         logger.info(f"Прокси: {proxy.split('@')[-1]}")
 
-    # ── Bright Data Browser API (приоритет) ───────────────────────────────────
+    # ── SadCaptcha Extension (локальный браузер + авто-капча через extension) ──
+    sadcaptcha_key = cfg.get("sadcaptcha_api_key", "").strip()
+    if sadcaptcha_key and not brightdata_cdp:
+        logger.info("Запускаю браузер с SadCaptcha extension (авто-капча)...")
+        try:
+            from tiktok_captcha_solver import make_playwright_solver_context
+            import tempfile
+
+            user_data_dir = profile_dir if (profile_dir and os.path.exists(profile_dir)) \
+                else tempfile.mkdtemp(prefix="tiktok_sad_")
+
+            # make_playwright_solver_context загружает extension и создаёт persistent context
+            context = make_playwright_solver_context(
+                p, sadcaptcha_key,
+                headless=headless,
+                args=launch_args,
+                user_data_dir=user_data_dir,
+                viewport={"width": 1280, "height": 800},
+                locale="ru-RU",
+                **({"proxy": proxy_cfg} if proxy_cfg else {}),
+            )
+
+            # Восстанавливаем сессию через cookies
+            if os.path.exists(session_file):
+                try:
+                    import json as _json
+                    with open(session_file) as f:
+                        state = _json.load(f)
+                    cookies = state.get("cookies", [])
+                    if cookies:
+                        await context.add_cookies(cookies)
+                        logger.info(f"✓ Загружено {len(cookies)} cookies из сессии")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить сессию: {e}")
+
+            logger.info("✅ SadCaptcha активна — капчи решаются автоматически")
+            return context, None  # persistent context без отдельного browser
+        except ImportError:
+            logger.warning("tiktok-captcha-solver не установлен: pip install tiktok-captcha-solver")
+        except Exception as e:
+            logger.warning(f"SadCaptcha недоступен: {e} — использую обычный браузер")
+
+    # ── Bright Data Browser API (приоритет, если нет SadCaptcha) ─────────────
     if brightdata_cdp:
         logger.info("Подключаюсь к Bright Data Browser API (CDP)...")
         try:

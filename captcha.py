@@ -1,9 +1,10 @@
 """
 captcha.py — автоматическое решение капчи TikTok
 Порядок попыток:
-  1. ddddocr (бесплатно, slider-капча)
-  2. CapSolver API (платно, если задан capsolver_api_key)
-  3. Ручное решение (только в интерактивном режиме)
+  1. SadCaptcha API (платно, TikTok-специфичный — rotation, puzzle, 3D)
+  2. ddddocr (бесплатно, slider-капча)
+  3. CapSolver API (платно, если задан capsolver_api_key)
+  4. Ручное решение (только в интерактивном режиме)
 """
 import asyncio
 import logging
@@ -115,6 +116,40 @@ async def _human_slide(page, slider_el, distance: int):
     await asyncio.sleep(random.uniform(0.1, 0.2))
     await page.mouse.up()
     await asyncio.sleep(2.0)
+
+
+async def solve_with_sadcaptcha(page, api_key: str) -> bool:
+    """
+    TikTok-специфичный решатель через SadCaptcha.
+    Если контекст создан через make_playwright_solver_context — extension решает сам,
+    просто ждём. Иначе пробуем AsyncPlaywrightSolver (API-режим).
+    """
+    # Вариант 1: API-режим (если доступен AsyncPlaywrightSolver)
+    try:
+        from tiktok_captcha_solver import AsyncPlaywrightSolver
+        logger.info("SadCaptcha: пробую API-режим...")
+        solver = AsyncPlaywrightSolver(page, api_key)
+        await solver.solve_captcha_if_present()
+        await asyncio.sleep(1.5)
+        if not await is_captcha_visible(page):
+            logger.info("✅ Капча решена через SadCaptcha API!")
+            return True
+    except ImportError:
+        logger.info("tiktok-captcha-solver не установлен: pip install tiktok-captcha-solver")
+        return False
+    except Exception as e:
+        logger.debug(f"SadCaptcha API-режим не сработал: {e}")
+
+    # Вариант 2: ждём авто-решения от extension (make_playwright_solver_context)
+    logger.info("SadCaptcha: ожидаю авто-решения от extension (до 20 сек)...")
+    for _ in range(20):
+        await asyncio.sleep(1)
+        if not await is_captcha_visible(page):
+            logger.info("✅ Капча решена SadCaptcha extension!")
+            return True
+
+    logger.warning("SadCaptcha: капча не решена за 20 сек")
+    return False
 
 
 async def solve_with_ddddocr(page) -> bool:
@@ -247,17 +282,23 @@ async def handle_captcha(page, cfg: dict) -> bool:
 
     logger.warning("⚠️  Обнаружена капча TikTok!")
 
-    # 1. ddddocr (бесплатно, slider)
+    # 1. SadCaptcha (платно, TikTok-специфичный — rotation/puzzle/3D)
+    sadcaptcha_key = cfg.get("sadcaptcha_api_key", "")
+    if sadcaptcha_key:
+        if await solve_with_sadcaptcha(page, sadcaptcha_key):
+            return True
+
+    # 2. ddddocr (бесплатно, slider)
     if await solve_with_ddddocr(page):
         return True
 
-    # 2. CapSolver (платно, если задан ключ)
+    # 3. CapSolver (платно, если задан ключ)
     capsolver_key = cfg.get("capsolver_api_key", "")
     if capsolver_key:
         if await solve_with_capsolver(page, capsolver_key):
             return True
 
-    # 3. Ручное решение — только в интерактивном (не headless) режиме
+    # 4. Ручное решение — только в интерактивном (не headless) режиме
     is_headless = bool(os.environ.get("RAILWAY_ENVIRONMENT")) or cfg.get("headless", False)
     if is_headless:
         logger.warning("Headless режим — пропускаю источник с капчей (не могу решить вручную)")
