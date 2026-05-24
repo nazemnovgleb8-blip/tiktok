@@ -1,0 +1,20 @@
+# Секреты — никогда не коммитить
+config.json
+tiktok_session.json
+*.log
+viral.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# macOS
+.DS_Store
+*.command
+
+# Chrome профиль (создан локально, не нужен на сервере)
+~/

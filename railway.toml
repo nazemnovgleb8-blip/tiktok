@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "python main.py"
+healthcheckPath = "/api/status"
+healthcheckTimeout = 30
+restartPolicyType = "always"
+
+[[volumes]]
+mountPath = "/data"

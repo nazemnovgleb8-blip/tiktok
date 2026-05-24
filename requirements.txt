@@ -1,0 +1,22 @@
+# Alta Viral Scanner — зависимости
+# Установка: pip install -r requirements.txt --break-system-packages
+
+# Браузерная автоматизация (TikTok scraper + Gemini скриншоты)
+playwright>=1.44.0
+
+# Веб-дашборд
+flask>=3.0.0
+
+# Планировщик задач (9:00 каждый день)
+apscheduler>=3.10.0
+
+# Gemini Vision API (new SDK — preferred)
+google-genai>=0.8.0
+# Legacy fallback (kept for compatibility)
+google-generativeai>=0.7.0
+
+# HTTP-запросы (Telegram уведомления)
+requests>=2.31.0
+
+# Утилиты (уже есть в stdlib, но на всякий случай)
+python-dotenv>=1.0.0
