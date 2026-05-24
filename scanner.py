@@ -274,7 +274,7 @@ async def _build_context(p, cfg: dict) -> tuple:
     profile_dir  = os.path.expanduser(cfg.get("profile_dir", ""))
 
     headless = _is_headless()
-    proxy    = cfg.get("proxy", "").strip()
+    proxy    = cfg.get("proxy", "").strip().rstrip("/")
     launch_args = [
         "--no-sandbox",
         "--disable-blink-features=AutomationControlled",
@@ -426,9 +426,12 @@ async def run_scan(cfg: dict,
         await page.add_init_script(STEALTH_JS)
 
         # ── Проверка логина ────────────────────────────────────────────────────
-        await page.goto("https://www.tiktok.com", wait_until="domcontentloaded",
-                        timeout=30000)
-        await asyncio.sleep(2)
+        try:
+            await page.goto("https://www.tiktok.com", wait_until="domcontentloaded",
+                            timeout=60000)
+        except Exception as e:
+            log(f"⚠️  TikTok не загрузился ({e}) — пробую продолжить...")
+        await asyncio.sleep(3)
         await _wait_for_captcha(page)
 
         is_logged = await page.evaluate(
