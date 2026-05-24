@@ -17,7 +17,8 @@ from werkzeug.utils import secure_filename
 
 logger = logging.getLogger("dashboard")
 app    = Flask(__name__)
-_scan_callback  = None   # устанавливается из main.py
+_scan_callback       = None   # устанавливается из main.py
+_test_scan_callback  = None   # тестовый скан
 _login_running  = threading.Event()
 
 
@@ -366,12 +367,20 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
       <h1>Библиотека</h1>
       <p class="subtitle">Все уникальные видео за всё время · {{ stats.total or 0 }} роликов · {{ stats.authors or 0 }} авторов</p>
     </div>
-    <form method="post" action="/run">
-      <button class="btn btn-orange" type="submit">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        Запустить скан
-      </button>
-    </form>
+    <div style="display:flex;gap:10px">
+      <form method="post" action="/run-test">
+        <button class="btn btn-ghost" type="submit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+          Тест (1 хэштег)
+        </button>
+      </form>
+      <form method="post" action="/run">
+        <button class="btn btn-orange" type="submit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Запустить скан
+        </button>
+      </form>
+    </div>
   </div>
 
   {% if msg %}
@@ -418,6 +427,10 @@ HISTORY_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
 <div class="page">
   <h1>История сканирований</h1>
   <p class="subtitle">Все запуски — нажми чтобы открыть выборку</p>
+
+  {% if msg %}
+  <div class="flash flash-{{ 'ok' if msg_type=='ok' else ('info' if msg_type=='info' else 'err') }}">{{ msg }}</div>
+  {% endif %}
 
   <div class="section">
     {% if scans %}
@@ -846,8 +859,11 @@ def home():
 @app.route("/history")
 @_require_auth
 def history():
+    msg      = request.args.get("msg", "")
+    msg_type = request.args.get("msg_type", "ok")
     scans = db.get_recent_scans(50)
-    return render_template_string(HISTORY_HTML, page="history", scans=scans)
+    return render_template_string(HISTORY_HTML, page="history", scans=scans,
+                                  msg=msg, msg_type=msg_type)
 
 
 @app.route("/scan/<int:scan_id>")
@@ -937,6 +953,16 @@ def run_now():
         t = threading.Thread(target=_scan_callback, daemon=True)
         t.start()
         return redirect(url_for("home", msg="Сканирование запущено ▶", msg_type="ok"))
+    return redirect(url_for("home", msg="Колбек не установлен", msg_type="err"))
+
+
+@app.route("/run-test", methods=["POST"])
+@_require_auth
+def run_test():
+    if _test_scan_callback:
+        t = threading.Thread(target=_test_scan_callback, daemon=True)
+        t.start()
+        return redirect(url_for("history", msg="🧪 Тестовый скан запущен — смотри Историю через ~2 мин", msg_type="ok"))
     return redirect(url_for("home", msg="Колбек не установлен", msg_type="err"))
 
 
@@ -1057,7 +1083,8 @@ def api_ingest():
         return jsonify({"error": str(e)}), 500
 
 
-def start(scan_cb=None, host="127.0.0.1", port=5001):
-    global _scan_callback
-    _scan_callback = scan_cb
+def start(scan_cb=None, test_cb=None, host="127.0.0.1", port=5001):
+    global _scan_callback, _test_scan_callback
+    _scan_callback      = scan_cb
+    _test_scan_callback = test_cb
     app.run(host=host, port=port, debug=False, use_reloader=False)

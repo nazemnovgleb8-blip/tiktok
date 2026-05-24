@@ -48,6 +48,83 @@ _scan_running = threading.Event()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  ТЕСТОВЫЙ СКАН (1 хэштег, без дайджеста)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def run_test_scan():
+    """
+    Быстрая проверка: сканирует только первый хэштег (target=20 видео).
+    Gemini-анализ делает (топ-3), дайджест в Telegram НЕ отправляет.
+    Результаты видны в дашборде в истории.
+    """
+    if _scan_running.is_set():
+        logger.warning("Скан уже запущен")
+        return
+
+    _scan_running.set()
+    scan_id = db.start_scan()
+    logger.info(f"🧪 Тестовый скан #{scan_id} запущен")
+
+    try:
+        cfg = config.load()
+
+        # Берём только первый хэштег, маленький target
+        test_cfg = dict(cfg)
+        tags = cfg.get("hashtags", ["viral"])
+        test_cfg["hashtags"]       = tags[:1]
+        test_cfg["search_queries"] = []
+        test_cfg["seed_accounts"]  = []
+        test_cfg["target_per_source"] = 20
+        test_cfg["gemini_top_n"]   = 3
+        # Отключаем FYP/related/accounts в scanner — только 1 хэштег
+        test_cfg["_test_mode"]     = True
+
+        from scanner import run_scan
+
+        def on_progress(msg):
+            logger.info(f"[test] {msg}")
+
+        all_videos, filtered = asyncio.run(
+            run_scan(test_cfg, on_progress=on_progress)
+        )
+        logger.info(f"Тест: найдено {len(all_videos)}, прошло фильтр: {len(filtered)}")
+
+        if not filtered:
+            logger.warning("Тест: нет видео — проверь сессию TikTok и хэштеги")
+            db.finish_scan(scan_id, len(all_videos), 0)
+            return
+
+        db.save_videos(scan_id, filtered)
+
+        # Gemini топ-3
+        from analyzer import analyze_videos
+        enriched = asyncio.run(analyze_videos(filtered[:3], test_cfg))
+        for v in enriched:
+            if v.get("gemini_done"):
+                db.update_gemini(
+                    url=v["url"],
+                    relevance=v.get("relevance", 0),
+                    hook=v.get("hook", ""),
+                    adaptation=v.get("adaptation", ""),
+                    category=v.get("category", "вирал"),
+                    why_viral=v.get("why_viral", ""),
+                    priority=v.get("priority", "средний"),
+                )
+
+        db.finish_scan(scan_id, len(all_videos), len(filtered))
+        logger.info(f"🧪 Тестовый скан #{scan_id} завершён — смотри в истории дашборда")
+
+        if not os.environ.get("RAILWAY_ENVIRONMENT"):
+            _sync_to_remote(scan_id, cfg)
+
+    except Exception as e:
+        logger.exception(f"Ошибка тестового скана: {e}")
+        db.fail_scan(scan_id, str(e))
+    finally:
+        _scan_running.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  ОСНОВНАЯ ФУНКЦИЯ СКАНА
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -166,9 +243,14 @@ def _start_dashboard(cfg):
         t = threading.Thread(target=run_full_scan, daemon=True, name="manual-scan")
         t.start()
 
+    def _test_callback():
+        """Вызывается из дашборда при нажатии «Тест (1 хэштег)»."""
+        t = threading.Thread(target=run_test_scan, daemon=True, name="test-scan")
+        t.start()
+
     t = threading.Thread(
         target=dashboard.start,
-        kwargs={"scan_cb": _scan_callback, "host": "0.0.0.0", "port": port},
+        kwargs={"scan_cb": _scan_callback, "test_cb": _test_callback, "host": "0.0.0.0", "port": port},
         daemon=True,
         name="dashboard",
     )

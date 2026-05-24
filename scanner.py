@@ -576,8 +576,13 @@ async def run_scan(cfg: dict,
         await context.storage_state(path=cfg["session_file"])
         log("✓ Сессия сохранена")
 
+        test_mode = cfg.get("_test_mode", False)
+
         # ── 0. FYP + Explore — самый свежий сигнал ────────────────────────────
-        log(f"\n[0/4] FYP + Explore (что TikTok продвигает прямо сейчас)...")
+        if test_mode:
+            log("🧪 Тестовый режим: только 1 хэштег, FYP/поиск/аккаунты пропущены")
+        else:
+            log(f"\n[0/4] FYP + Explore (что TikTok продвигает прямо сейчас)...")
 
         fyp_sources = [
             ("https://www.tiktok.com/foryou",  "fyp"),
@@ -585,7 +590,8 @@ async def run_scan(cfg: dict,
             ("https://www.tiktok.com/explore",  "explore"),
         ]
         fyp_done = False
-        for fyp_url, fyp_src in fyp_sources:
+        if not test_mode:
+          for fyp_url, fyp_src in fyp_sources:
             if fyp_done:
                 break
             log(f"  {fyp_url}...")
@@ -617,7 +623,7 @@ async def run_scan(cfg: dict,
             await asyncio.sleep(random.uniform(8, 15))
 
         # ── 2. Поиск (с фильтром по дате — последняя неделя) ──────────────────
-        if not blocked:
+        if not blocked and not test_mode:
             log(f"\n[2/4] Поиск ({len(cfg['search_queries'])} запросов, за {max_age_days} дней)...")
             for query in cfg["search_queries"]:
                 log(f"  \"{query}\"...")
@@ -652,7 +658,7 @@ async def run_scan(cfg: dict,
                 await asyncio.sleep(random.uniform(10, 18))
 
         # ── 3. Related videos + динамические хэштеги ─────────────────────────
-        if not blocked and all_videos:
+        if not blocked and all_videos and not test_mode:
             log(f"\n[3/4] Related videos + динамические хэштеги...")
 
             # Топ-10 видео с лучшим score → ищем похожие
@@ -729,14 +735,16 @@ async def run_scan(cfg: dict,
                     await asyncio.sleep(random.uniform(8, 12))
 
         # ── 4. Пул аккаунтов из ниши (растёт между сканами) ──────────────────
-        if blocked:
+        if test_mode:
+            log("🧪 Тест завершён — этапы 3 и 4 пропущены")
+        elif blocked:
             log("⛔ Скан остановлен досрочно — загрузи актуальную сессию TikTok через Настройки дашборда")
         else:
             log(f"\n[4/4] Аккаунты из ниши...")
 
         # ── также добавляем авторов вирусных видео в пул ────────────────────
         import database as db_mod
-        if not blocked and all_videos:
+        if not blocked and not test_mode and all_videos:
             viral_authors = list({
                 v["author"] for v in all_videos
                 if v["score"] >= cfg.get("min_score", 10) * 3
@@ -773,7 +781,7 @@ async def run_scan(cfg: dict,
 
         log(f"  Сканирую {len(all_accounts)} аккаунтов ({len(cfg['seed_accounts'])} seed + {len(pool_accounts)} из пула)...")
 
-        for acc in ([] if blocked else all_accounts):
+        for acc in ([] if (blocked or test_mode) else all_accounts):
             log(f"  @{acc}...")
             videos = await _scroll_and_collect(
                 page, f"https://www.tiktok.com/@{acc}",
