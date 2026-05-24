@@ -368,25 +368,7 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
       <p class="subtitle">Все уникальные видео за всё время · {{ stats.total or 0 }} роликов · {{ stats.authors or 0 }} авторов</p>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
-      {% if is_railway %}
-      <span style="font-size:13px;color:#c44f00;background:#fff5f0;border:1px solid #ffd0b0;
-                   padding:8px 14px;border-radius:10px">
-        ⚠ Сканы запускай локально — Railway заблокирован TikTok
-      </span>
-      {% else %}
-      <form method="post" action="/run-test">
-        <button class="btn btn-ghost" type="submit">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
-          Тест (1 хэштег)
-        </button>
-      </form>
-      <form method="post" action="/run">
-        <button class="btn btn-orange" type="submit">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          Запустить скан
-        </button>
-      </form>
-      {% endif %}
+      <span style="font-size:12px;color:#aaa">Запуск: <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">python3 main.py --now</code></span>
     </div>
   </div>
 
@@ -415,15 +397,40 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
 
   <div class="section">
     <div class="section-header">
-      <h2 style="margin:0">Все ролики</h2>
+      <h2 style="margin:0">Все ролики <span style="font-size:14px;font-weight:400;color:#888">· {{ videos|length }}</span></h2>
       <div class="filter-chips">
-        <a href="?cat=all"        class="chip {{ 'active' if cat=='all' else '' }}">Все</a>
-        <a href="?cat=брендинг"   class="chip {{ 'active' if cat=='брендинг' else '' }}">🎨 Брендинг</a>
-        <a href="?cat=сайты"      class="chip {{ 'active' if cat=='сайты' else '' }}">🌐 Сайты</a>
-        <a href="?cat=ии-контент" class="chip {{ 'active' if cat=='ии-контент' else '' }}">🤖 ИИ-контент</a>
-        <a href="?cat=вирал"      class="chip {{ 'active' if cat=='вирал' else '' }}">⚡ Вирал</a>
+        <a href="?cat=all&min_views={{ min_views }}&min_followers={{ min_followers }}"        class="chip {{ 'active' if cat=='all' else '' }}">Все</a>
+        <a href="?cat=брендинг&min_views={{ min_views }}&min_followers={{ min_followers }}"   class="chip {{ 'active' if cat=='брендинг' else '' }}">🎨 Брендинг</a>
+        <a href="?cat=сайты&min_views={{ min_views }}&min_followers={{ min_followers }}"      class="chip {{ 'active' if cat=='сайты' else '' }}">🌐 Сайты</a>
+        <a href="?cat=ии-контент&min_views={{ min_views }}&min_followers={{ min_followers }}" class="chip {{ 'active' if cat=='ии-контент' else '' }}">🤖 ИИ-контент</a>
+        <a href="?cat=вирал&min_views={{ min_views }}&min_followers={{ min_followers }}"      class="chip {{ 'active' if cat=='вирал' else '' }}">⚡ Вирал</a>
       </div>
     </div>
+
+    <!-- Фильтры -->
+    <form method="get" style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap">
+      <input type="hidden" name="cat" value="{{ cat }}">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:12px;color:#666;font-weight:500">Просмотры от</label>
+        <input type="number" name="min_views" value="{{ min_views }}" min="0" step="10000"
+               placeholder="0"
+               style="width:140px;padding:7px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:12px;color:#666;font-weight:500">Подписчики до</label>
+        <input type="number" name="min_followers" value="{{ min_followers }}" min="0" step="1000"
+               placeholder="0"
+               style="width:140px;padding:7px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none">
+      </div>
+      <button type="submit"
+              style="padding:8px 18px;background:#0d0d0d;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;height:36px">
+        Применить
+      </button>
+      {% if min_views > 0 or min_followers > 0 %}
+      <a href="?cat={{ cat }}" style="padding:8px 14px;color:#888;font-size:13px;line-height:36px">Сбросить</a>
+      {% endif %}
+    </form>
+
     {{ video_table(videos) }}
   </div>
 </div>
@@ -852,15 +859,23 @@ function removeTag(el, type, val) {
 def home():
     """Библиотека — все уникальные видео за всё время."""
     try:
-        msg      = request.args.get("msg", "")
-        msg_type = request.args.get("msg_type", "ok")
-        cat      = request.args.get("cat", "all")
+        msg            = request.args.get("msg", "")
+        msg_type       = request.args.get("msg_type", "ok")
+        cat            = request.args.get("cat", "all")
+        min_views      = int(request.args.get("min_views", 0) or 0)
+        min_followers  = int(request.args.get("min_followers", 0) or 0)
 
         stats  = db.get_all_videos_stats()
-        videos = db.get_all_videos(limit=500, cat=cat if cat != "all" else None)
+        videos = db.get_all_videos(
+            limit=1000,
+            cat=cat if cat != "all" else None,
+            min_views=min_views,
+            min_followers=min_followers,
+        )
 
         return render_template_string(HOME_HTML,
             page="home", stats=stats or {}, videos=videos or [],
+            min_views=min_views, min_followers=min_followers,
             msg=msg, msg_type=msg_type, cat=cat)
     except Exception as e:
         logger.exception(f"Ошибка главной страницы: {e}")

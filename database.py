@@ -163,7 +163,8 @@ def update_gemini(url: str, relevance: int, hook: str, adaptation: str,
         )
 
 
-def get_all_videos(limit: int = 1000, cat: str = None, min_views: int = 0) -> list:
+def get_all_videos(limit: int = 1000, cat: str = None,
+                   min_views: int = 0, min_followers: int = 0) -> list:
     """Все уникальные видео по всем сканам, дедуплицированные по URL."""
     with get_conn() as conn:
         where = ["1=1"]
@@ -174,6 +175,9 @@ def get_all_videos(limit: int = 1000, cat: str = None, min_views: int = 0) -> li
         if min_views > 0:
             where.append("views >= ?")
             params.append(min_views)
+        if min_followers > 0:
+            where.append("followers <= ?")
+            params.append(min_followers)
         where_sql = " AND ".join(where)
         rows = conn.execute(f"""
             SELECT * FROM videos
