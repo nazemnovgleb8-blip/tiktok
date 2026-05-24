@@ -671,21 +671,43 @@ details[open] > summary { margin-bottom:20px }
       <p style="font-size:13px;color:#6e6e73;margin-bottom:16px">
         Загрузи <code>tiktok_session.json</code> для Railway — файл появится после первого локального входа.
       </p>
-      <form method="post" action="/upload-session" enctype="multipart/form-data"
-            style="display:flex;gap:12px;align-items:center">
-        <input type="file" name="session_file" accept=".json"
+      <!-- Отдельная форма для загрузки сессии — вынесена из основной формы через id -->
+      <div style="display:flex;gap:12px;align-items:center">
+        <input type="file" id="session-file-input" accept=".json"
                style="flex:1;border:1.5px dashed #d0d0d0;padding:10px;border-radius:12px;
                       background:#fafafa;font-size:13px;cursor:pointer">
-        <button type="submit" class="btn btn-black" style="flex-shrink:0">Загрузить</button>
-      </form>
+        <button type="button" class="btn btn-black" style="flex-shrink:0"
+                onclick="uploadSession()">Загрузить</button>
+      </div>
     </details>
   </div>
 
-  <div style="display:flex;gap:12px;justify-content:flex-end">
-    <button type="submit" class="btn btn-orange">Сохранить</button>
+  <!-- Sticky save bar -->
+  <div id="save-bar" style="
+    position:sticky;bottom:0;left:0;right:0;
+    background:#fff;border-top:1px solid #e8e8e8;
+    padding:14px 0;margin:0 -32px;
+    display:flex;align-items:center;justify-content:flex-end;
+    gap:12px;padding-right:32px;z-index:50;
+  ">
+    <span id="save-hint" style="font-size:13px;color:#6e6e73"></span>
+    <button type="submit" class="btn btn-orange" id="save-btn">Сохранить настройки</button>
   </div>
+
   </form>
 </div>
+
+<!-- Toast уведомление -->
+<div id="toast" style="
+  position:fixed;bottom:80px;right:24px;
+  background:#0d0d0d;color:#fff;
+  padding:12px 20px;border-radius:14px;
+  font-size:14px;font-weight:500;
+  box-shadow:0 8px 32px rgba(0,0,0,.18);
+  opacity:0;transform:translateY(12px);
+  transition:all .25s;pointer-events:none;z-index:999;
+  display:flex;align-items:center;gap:8px;
+"></div>
 
 <script>
 const store = {
@@ -697,10 +719,68 @@ const inputs = {hashtag:'hashtags-input', account:'accounts-input', query:'queri
 const lists  = {hashtag:'tags-list', account:'accounts-list', query:'queries-list'};
 const sep    = {hashtag:',', account:',', query:'||'};
 
+// ── Toast ──────────────────────────────────────────────────────────────────
+function showToast(msg, ok) {
+  const t = document.getElementById('toast');
+  t.innerHTML = (ok ? '✓ ' : '✗ ') + msg;
+  t.style.background = ok ? '#1a7a3c' : '#cc0011';
+  t.style.opacity = '1';
+  t.style.transform = 'translateY(0)';
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(12px)';
+  }, 3000);
+}
+
+// Показываем тост если страница открылась после сохранения
+(function(){
+  const p = new URLSearchParams(window.location.search);
+  const msg = p.get('msg');
+  if (msg) showToast(msg, p.get('msg_type') !== 'err');
+})();
+
+// ── Сохранение через fetch (без перезагрузки страницы) ─────────────────────
+document.getElementById('save-btn').addEventListener('click', function(e) {
+  e.preventDefault();
+  const form = document.querySelector('form[action="/settings/save"]');
+  const data = new FormData(form);
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Сохраняю...';
+  fetch('/settings/save-ajax', { method:'POST', body: data })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        showToast('Настройки сохранены', true);
+        btn.textContent = '✓ Сохранено';
+        setTimeout(() => { btn.textContent = 'Сохранить настройки'; btn.disabled = false; }, 2000);
+      } else {
+        showToast('Ошибка: ' + (d.error || 'неизвестно'), false);
+        btn.textContent = 'Сохранить настройки';
+        btn.disabled = false;
+      }
+    })
+    .catch(() => {
+      showToast('Ошибка соединения', false);
+      btn.textContent = 'Сохранить настройки';
+      btn.disabled = false;
+    });
+});
+
+// ── Загрузка сессии ────────────────────────────────────────────────────────
+function uploadSession() {
+  const fi = document.getElementById('session-file-input');
+  if (!fi.files.length) { showToast('Выбери файл', false); return; }
+  const fd = new FormData();
+  fd.append('session_file', fi.files[0]);
+  fetch('/upload-session', { method:'POST', body: fd })
+    .then(r => { showToast(r.ok ? 'Сессия загружена ✓' : 'Ошибка загрузки', r.ok); })
+    .catch(() => showToast('Ошибка соединения', false));
+}
+
+// ── Теги ───────────────────────────────────────────────────────────────────
 function syncInput(type) {
   document.getElementById(inputs[type]).value = store[type].join(sep[type]);
-  // обновляем счётчик
-  const h = document.querySelector('h2 .source-count');
 }
 function addTag(type) {
   const id = type==='hashtag'?'new-tag':type==='account'?'new-account':'new-query';
@@ -803,33 +883,51 @@ def settings():
         session_ok=session_ok)
 
 
+def _apply_settings_from_form(form):
+    """Общая логика сохранения настроек из form-данных."""
+    c = cfg_module.load()
+    c["telegram_bot_token"] = form.get("telegram_bot_token", "")
+    c["telegram_chat_id"]   = form.get("telegram_chat_id", "")
+    c["gemini_api_key"]     = form.get("gemini_api_key", "")
+    c["schedule_hour"]      = int(form.get("schedule_hour", 9))
+    c["gemini_top_n"]       = int(form.get("gemini_top_n", 50))
+    c["min_score"]          = int(form.get("min_score", 10))
+    c["min_views"]          = int(form.get("min_views", 50000))
+    c["capsolver_api_key"]  = form.get("capsolver_api_key", "")
+    c["brightdata_cdp_url"] = form.get("brightdata_cdp_url", "").strip()
+    dashboard_url = form.get("dashboard_url", "").strip()
+    if dashboard_url:
+        c["dashboard_url"] = dashboard_url
+    c["proxy"]         = form.get("proxy", "").strip()
+    c["hashtags"]      = [x.strip() for x in form.get("hashtags","").split(",") if x.strip()]
+    c["seed_accounts"] = [x.strip() for x in form.get("seed_accounts","").split(",") if x.strip()]
+    c["search_queries"]= [x.strip() for x in form.get("search_queries","").split("||") if x.strip()]
+    cfg_module.save(c)
+    return c
+
+
+@app.route("/settings/save-ajax", methods=["POST"])
+@_require_auth
+def settings_save_ajax():
+    """AJAX-версия сохранения — возвращает JSON, без редиректа."""
+    try:
+        _apply_settings_from_form(request.form)
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.exception(f"Ошибка сохранения настроек (ajax): {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/settings/save", methods=["POST"])
 @_require_auth
 def settings_save():
     try:
-        c = cfg_module.load()
-        c["telegram_bot_token"] = request.form.get("telegram_bot_token", "")
-        c["telegram_chat_id"]   = request.form.get("telegram_chat_id", "")
-        c["gemini_api_key"]     = request.form.get("gemini_api_key", "")
-        c["schedule_hour"]      = int(request.form.get("schedule_hour", 9))
-        c["gemini_top_n"]       = int(request.form.get("gemini_top_n", 50))
-        c["min_score"]          = int(request.form.get("min_score", 10))
-        c["min_views"]          = int(request.form.get("min_views", 50000))
-        c["capsolver_api_key"]   = request.form.get("capsolver_api_key", "")
-        c["brightdata_cdp_url"]  = request.form.get("brightdata_cdp_url", "").strip()
-        dashboard_url = request.form.get("dashboard_url", "").strip()
-        if dashboard_url:
-            c["dashboard_url"] = dashboard_url
-        c["proxy"]              = request.form.get("proxy", "").strip()
-        c["hashtags"]      = [x.strip() for x in request.form.get("hashtags","").split(",") if x.strip()]
-        c["seed_accounts"] = [x.strip() for x in request.form.get("seed_accounts","").split(",") if x.strip()]
-        c["search_queries"]= [x.strip() for x in request.form.get("search_queries","").split("||") if x.strip()]
-        cfg_module.save(c)
+        _apply_settings_from_form(request.form)
         logger.info(f"Настройки сохранены в {cfg_module.CONFIG_FILE}")
-        return redirect(url_for("settings", msg=f"Сохранено ✓ ({cfg_module.CONFIG_FILE})", msg_type="ok"))
+        return redirect(url_for("settings", msg="Сохранено ✓", msg_type="ok"))
     except Exception as e:
         logger.exception(f"Ошибка сохранения настроек: {e}")
-        return redirect(url_for("settings", msg=f"Ошибка сохранения: {e}", msg_type="err"))
+        return redirect(url_for("settings", msg=f"Ошибка: {e}", msg_type="err"))
 
 
 @app.route("/run", methods=["POST"])
