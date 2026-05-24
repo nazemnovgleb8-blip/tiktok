@@ -6,13 +6,17 @@ import os
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
-# На Railway данные хранятся в /data (постоянный volume)
-# Локально — рядом со скриптом
 IS_RAILWAY = bool(os.environ.get("RAILWAY_ENVIRONMENT"))
-DATA_DIR   = "/data" if IS_RAILWAY else DIR
+
+# На Railway конфиг и БД хранятся в /data если volume примонтирован,
+# иначе — рядом со скриптом (в контейнере данные живут до следующего деплоя)
+if IS_RAILWAY:
+    DATA_DIR = "/data" if os.path.ismount("/data") else DIR
+else:
+    DATA_DIR = DIR
 
 CONFIG_FILE  = os.path.join(DATA_DIR, "config.json")
-_CONFIG_SEED = os.path.join(DIR, "config.json")  # исходный файл в репо
+_CONFIG_SEED = os.path.join(DIR, "config.example.json")  # шаблон из репо
 
 DEFAULT = {
     # ── TikTok источники ──────────────────────────────────────
@@ -99,11 +103,46 @@ def load() -> dict:
         data["session_file"] = os.path.join(DATA_DIR, "tiktok_session.json")
         updated = True
 
+    # Переменные окружения всегда перекрывают config.json (удобно для Railway)
+    _env_map = {
+        "GEMINI_API_KEY":      "gemini_api_key",
+        "TELEGRAM_BOT_TOKEN":  "telegram_bot_token",
+        "TELEGRAM_CHAT_ID":    "telegram_chat_id",
+        "PROXY":               "proxy",
+        "DASHBOARD_URL":       "dashboard_url",
+        "MIN_SCORE":           "min_score",
+    }
+    for env_key, cfg_key in _env_map.items():
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            data[cfg_key] = int(val) if cfg_key == "min_score" else val
+
     if updated:
         save(data)
     return data
 
 
 def save(cfg: dict):
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def restore_session_from_env():
+    """
+    Если задана TIKTOK_SESSION_B64 — декодирует и сохраняет сессию в /data.
+    Вызывается при старте приложения.
+    """
+    b64 = os.environ.get("TIKTOK_SESSION_B64", "").strip()
+    if not b64:
+        return
+    import base64
+    session_path = os.path.join(DATA_DIR, "tiktok_session.json")
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        data = base64.b64decode(b64)
+        with open(session_path, "wb") as f:
+            f.write(data)
+    except Exception as e:
+        import logging
+        logging.getLogger("config").warning(f"Не удалось восстановить сессию из env: {e}")
