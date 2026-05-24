@@ -377,6 +377,12 @@ def _run_analyze_only(cfg: dict):
         send_daily_digest(enriched, scan_stats, cfg, scan_id=scan_id)
         logger.info("✅ Анализ и дайджест завершены!")
 
+        # Синхронизируем с Railway (только локально)
+        if not os.environ.get("RAILWAY_ENVIRONMENT"):
+            _cleanup_temp_files()
+            _sync_to_remote(scan_id, cfg)
+            _git_push()
+
     except Exception as e:
         logger.exception(f"Ошибка анализа: {e}")
 
