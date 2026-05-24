@@ -327,9 +327,10 @@ def _is_headless() -> bool:
 
 
 async def _build_context(p, cfg: dict) -> tuple:
-    session_file = cfg["session_file"]
-    chrome_path  = cfg.get("chrome_path", "")
-    profile_dir  = os.path.expanduser(cfg.get("profile_dir", ""))
+    session_file    = cfg["session_file"]
+    chrome_path     = cfg.get("chrome_path", "")
+    profile_dir     = os.path.expanduser(cfg.get("profile_dir", ""))
+    brightdata_cdp  = cfg.get("brightdata_cdp_url", "").strip()
 
     headless = _is_headless()
     proxy    = cfg.get("proxy", "").strip().rstrip("/")
@@ -343,8 +344,39 @@ async def _build_context(p, cfg: dict) -> tuple:
 
     proxy_cfg = {"server": proxy} if proxy else None
     if proxy:
-        logger.info(f"Прокси: {proxy.split('@')[-1]}")  # не логируем пароль
+        logger.info(f"Прокси: {proxy.split('@')[-1]}")
 
+    # ── Bright Data Browser API (приоритет) ───────────────────────────────────
+    if brightdata_cdp:
+        logger.info("Подключаюсь к Bright Data Browser API (CDP)...")
+        try:
+            browser = await p.chromium.connect_over_cdp(brightdata_cdp)
+            # Берём существующий контекст или создаём новый
+            if browser.contexts:
+                context = browser.contexts[0]
+            else:
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    locale="ru-RU",
+                )
+            # Восстанавливаем сессию если есть
+            if os.path.exists(session_file):
+                try:
+                    import json as _json
+                    with open(session_file) as f:
+                        state = _json.load(f)
+                    cookies = state.get("cookies", [])
+                    if cookies:
+                        await context.add_cookies(cookies)
+                        logger.info(f"✓ Восстановлено {len(cookies)} cookies из сессии")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить сессию: {e}")
+            logger.info("✅ Bright Data подключён — капчи и блокировки решаются автоматически")
+            return context, browser
+        except Exception as e:
+            logger.warning(f"Bright Data CDP недоступен: {e} — использую локальный браузер")
+
+    # ── Локальный браузер ─────────────────────────────────────────────────────
     ctx_kwargs = dict(
         user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -369,7 +401,6 @@ async def _build_context(p, cfg: dict) -> tuple:
         return context, browser
 
     if headless:
-        # На сервере без сессии — просто запускаем без профиля
         logger.warning("Нет сессии — запускаю без авторизации (headless)")
         browser = await p.chromium.launch(headless=True, args=launch_args)
         context = await browser.new_context(
@@ -378,7 +409,7 @@ async def _build_context(p, cfg: dict) -> tuple:
         )
         return context, browser
 
-    # Локально — используем Chrome профиль
+    # Локально — Chrome профиль
     logger.info("Сессии нет — запускаю Chrome профиль...")
     if profile_dir and not os.path.exists(profile_dir):
         import shutil
@@ -404,7 +435,6 @@ async def _build_context(p, cfg: dict) -> tuple:
         context = await p.chromium.launch_persistent_context(**persistent_kwargs)
         return context, None
 
-    # Fallback — Playwright Chromium без профиля
     browser = await p.chromium.launch(headless=False, args=launch_args)
     context = await browser.new_context(
         viewport={"width": 1280, "height": 800}, locale="ru-RU"
@@ -545,7 +575,7 @@ async def run_scan(cfg: dict,
             log(f"  {fyp_url}...")
             videos = await _scroll_and_collect(
                 page, fyp_url,
-                source=fyp_src, target=60, cfg=cfg,
+                source=fyp_src, target=100, cfg=cfg,
                 week_ago_ts=week_ago_ts
             )
             new = add(videos)

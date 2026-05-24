@@ -554,7 +554,11 @@ SETTINGS_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
         <input type="password" name="capsolver_api_key" value="{{ cfg.get('capsolver_api_key','') }}" placeholder="CAP-xxxxxxxxxxxxxxxx">
       </div>
       <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
-        <label>Прокси <span style="color:#6e6e73;font-size:11px">— резидентский IP чтобы TikTok не блокировал (socks5://user:pass@host:port)</span></label>
+        <label>Bright Data CDP URL <span style="color:#1a7a3c;font-size:11px">— удалённый браузер с авто-решением капч</span></label>
+        <input type="password" name="brightdata_cdp_url" value="{{ cfg.get('brightdata_cdp_url','') }}" placeholder="wss://brd-customer-...@brd.superproxy.io:9222">
+      </div>
+      <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
+        <label>Прокси <span style="color:#6e6e73;font-size:11px">— используется только если Bright Data не задан</span></label>
         <input type="text" name="proxy" value="{{ cfg.get('proxy','') }}" placeholder="socks5://user:pass@host:port">
       </div>
     </div>
@@ -750,7 +754,8 @@ def settings_save():
         c["gemini_top_n"]       = int(request.form.get("gemini_top_n", 50))
         c["min_score"]          = int(request.form.get("min_score", 10))
         c["min_views"]          = int(request.form.get("min_views", 50000))
-        c["capsolver_api_key"]  = request.form.get("capsolver_api_key", "")
+        c["capsolver_api_key"]   = request.form.get("capsolver_api_key", "")
+        c["brightdata_cdp_url"]  = request.form.get("brightdata_cdp_url", "").strip()
         dashboard_url = request.form.get("dashboard_url", "").strip()
         if dashboard_url:
             c["dashboard_url"] = dashboard_url

@@ -113,13 +113,18 @@ def send_daily_digest(videos: list[dict], scan_stats: dict, cfg: dict, scan_id: 
     today = date.today().strftime("%d.%m.%Y")
 
     # ── Фильтр по минимальным просмотрам ──────────────────────────────────────
-    min_views = cfg.get("min_views", 50_000)
+    min_views  = cfg.get("min_views", 50_000)
+    MIN_DIGEST = 10  # минимум видео в дайджесте всегда
+
     filtered = [v for v in videos if v.get("views", 0) >= min_views]
 
-    if not filtered:
-        # Если ни одного — берём топ без фильтра (чтобы дайджест не был пустым)
-        logger.warning(f"Ни одного видео с {_fmt(min_views)}+ просмотрами — показываю всё")
-        filtered = videos
+    # Если прошло меньше MIN_DIGEST — добираем лучшие по score из остальных
+    if len(filtered) < MIN_DIGEST:
+        already = {v["url"] for v in filtered}
+        extras  = [v for v in videos if v["url"] not in already]
+        need    = MIN_DIGEST - len(filtered)
+        filtered = filtered + extras[:need]
+        logger.info(f"В дайджесте: {len(filtered)} видео ({len(filtered)-need} с {_fmt(min_views)}+ просмотрами + {need} добрали)")
 
     total   = scan_stats.get("total_relevant", 0)
     ultra   = scan_stats.get("ultra", 0)

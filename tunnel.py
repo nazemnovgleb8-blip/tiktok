@@ -86,30 +86,80 @@ def _poll_ngrok_api(on_ready=None) -> bool:
 
 
 def _run_ngrok(bin_path: str, port: int, on_ready=None):
-    """Запускает ngrok и получает публичный URL через API (ngrok v3+)."""
-    cmd = [bin_path, "http", str(port)]
+    """Запускает ngrok и получает публичный URL (совместимо с v2 и v3)."""
+    # --log stdout + json даёт URL прямо в выводе (работает в обоих версиях)
+    cmd = [
+        bin_path, "http", str(port),
+        "--log", "stdout",
+        "--log-format", "json",
+        "--web-addr", "localhost:4040",   # явно включаем API на 4040
+    ]
     logger.info(f"Запускаю ngrok на порту {port}...")
 
     while True:
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
             )
             global _tunnel_proc
             _tunnel_proc = proc
 
-            # Ждём пока ngrok поднимет туннель и опрашиваем API
-            time.sleep(2)
-            if _poll_ngrok_api(on_ready):
-                # Держим процесс живым
-                proc.wait()
-            else:
-                logger.warning("ngrok запустился, но URL не получен через API за 10 сек")
-                proc.wait()
+            url_found = False
 
-            logger.warning("ngrok завершился — перезапуск через 5 сек...")
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Логируем ошибки ngrok
+                try:
+                    obj = json.loads(line)
+                    lvl = obj.get("lvl", "")
+                    msg = obj.get("msg", "")
+                    err = obj.get("err", "")
+
+                    if lvl in ("eror", "crit") or err:
+                        logger.warning(f"[ngrok] {msg} {err}".strip())
+
+                    # URL может быть в поле url или в msg
+                    url = obj.get("url") or obj.get("URL") or ""
+                    if not url and msg:
+                        m = re.search(r"https://[^\s\"']+\.ngrok[^\s\"']*", msg)
+                        if m:
+                            url = m.group(0)
+                    if url and url.startswith("https://") and not url_found:
+                        url_found = True
+                        _save_url(url, on_ready)
+
+                except json.JSONDecodeError:
+                    # Текстовый вывод — ищем URL напрямую
+                    m = re.search(r"https://[^\s]+\.ngrok[^\s]*", line)
+                    if m and not url_found:
+                        url_found = True
+                        _save_url(m.group(0), on_ready)
+
+                # Параллельно пробуем API (ngrok v3 пишет URL только туда)
+                if not url_found:
+                    try:
+                        with urllib.request.urlopen(
+                            "http://127.0.0.1:4040/api/tunnels", timeout=1
+                        ) as r:
+                            data = json.loads(r.read())
+                            for t in data.get("tunnels", []):
+                                u = t.get("public_url", "")
+                                if u.startswith("https://"):
+                                    url_found = True
+                                    _save_url(u, on_ready)
+                                    break
+                    except Exception:
+                        pass
+
+            proc.wait()
+            rc = proc.returncode
+            logger.warning(f"ngrok завершился (код {rc}) — перезапуск через 5 сек...")
 
         except Exception as e:
             logger.error(f"Ошибка ngrok: {e}")
