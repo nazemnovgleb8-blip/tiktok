@@ -68,6 +68,15 @@ def init():
             if col not in existing:
                 conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {coldef}")
 
+        # KV-хранилище для настроек (сессия TikTok и др.)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS kv_store (
+            key   TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT
+        )
+        """)
+
 
 def start_scan() -> int:
     with get_conn() as conn:
@@ -181,6 +190,24 @@ def get_known_urls(days: int = 30) -> set:
             "SELECT url FROM videos WHERE created_at >= ?", (cutoff,)
         ).fetchall()
     return {row[0] for row in rows}
+
+
+def kv_set(key: str, value: str):
+    """Сохраняет значение в kv_store."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, datetime.now().isoformat())
+        )
+
+
+def kv_get(key: str, default: str = "") -> str:
+    """Читает значение из kv_store."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM kv_store WHERE key=?", (key,)
+        ).fetchone()
+    return row[0] if row else default
 
 
 def get_stats(scan_id: int) -> dict:

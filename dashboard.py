@@ -705,16 +705,23 @@ def upload_session():
     if not f or not f.filename:
         return redirect(url_for("settings", msg="Файл не выбран", msg_type="err"))
     try:
+        import base64
         cfg  = cfg_module.load()
         path = cfg.get("session_file", "tiktok_session.json")
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        f.save(path)
-        logger.info(f"Сессия загружена: {path}")
+        data = f.read()
+        # Сохраняем файл
+        with open(path, "wb") as fout:
+            fout.write(data)
+        # Дублируем в БД — выживает при рестартах
+        db.kv_set("tiktok_session_b64", base64.b64encode(data).decode())
+        logger.info(f"Сессия загружена и сохранена в БД: {path}")
         return redirect(url_for("settings",
             msg="✓ Сессия успешно загружена — следующий скан пройдёт авторизованно",
             msg_type="ok"))
     except Exception as e:
-        return redirect(url_for("settings", msg=f"Ошибка: {e}", msg_type="err"))
+        logger.exception(f"Ошибка загрузки сессии: {e}")
+        return redirect(url_for("settings", msg="Ошибка при загрузке файла", msg_type="err"))
 
 
 @app.route("/login-tiktok", methods=["POST"])

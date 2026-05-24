@@ -195,6 +195,30 @@ def _start_scheduler(cfg):
 #  ENTRY POINT
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _restore_session(cfg: dict):
+    """Восстанавливает tiktok_session.json из БД или env при каждом старте."""
+    import base64
+    session_path = cfg.get("session_file", "tiktok_session.json")
+    if os.path.exists(session_path):
+        return  # файл уже есть
+
+    # 1. Пробуем из БД
+    b64 = db.kv_get("tiktok_session_b64")
+    if not b64:
+        # 2. Пробуем из env
+        b64 = os.environ.get("TIKTOK_SESSION_B64", "").strip()
+    if b64:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(session_path)), exist_ok=True)
+            with open(session_path, "wb") as f:
+                f.write(base64.b64decode(b64))
+            logger.info("✓ TikTok сессия восстановлена")
+        except Exception as e:
+            logger.warning(f"Не удалось восстановить сессию: {e}")
+    else:
+        logger.warning("Сессия TikTok не найдена — загрузи через Настройки дашборда")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Alta Viral Scanner")
     parser.add_argument("--login",     action="store_true",
@@ -210,6 +234,9 @@ def main():
     # Инициализация БД
     db.init()
     cfg = config.load()
+
+    # Восстанавливаем TikTok сессию: сначала из БД, потом из env
+    _restore_session(cfg)
 
     logger.info("━" * 60)
     logger.info("  Alta Viral Scanner  |  стартуем...")
