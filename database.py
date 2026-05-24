@@ -176,7 +176,7 @@ def get_all_videos(limit: int = 1000, cat: str = None,
             where.append("views >= ?")
             params.append(min_views)
         if min_followers > 0:
-            where.append("followers <= ?")
+            where.append("followers >= ?")
             params.append(min_followers)
         where_sql = " AND ".join(where)
         rows = conn.execute(f"""

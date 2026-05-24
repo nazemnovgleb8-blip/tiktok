@@ -412,13 +412,13 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
       <input type="hidden" name="cat" value="{{ cat }}">
       <div style="display:flex;flex-direction:column;gap:4px">
         <label style="font-size:12px;color:#666;font-weight:500">Просмотры от</label>
-        <input type="number" name="min_views" value="{{ min_views }}" min="0" step="10000"
+        <input type="number" name="min_views" value="{{ min_views }}"
                placeholder="0"
                style="width:140px;padding:7px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none">
       </div>
       <div style="display:flex;flex-direction:column;gap:4px">
-        <label style="font-size:12px;color:#666;font-weight:500">Подписчики до</label>
-        <input type="number" name="min_followers" value="{{ min_followers }}" min="0" step="1000"
+        <label style="font-size:12px;color:#666;font-weight:500">Подписчики от</label>
+        <input type="number" name="min_followers" value="{{ min_followers }}"
                placeholder="0"
                style="width:140px;padding:7px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none">
       </div>
