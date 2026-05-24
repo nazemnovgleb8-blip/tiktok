@@ -403,6 +403,23 @@ async def run_scan(cfg: dict,
 
     target = cfg.get("target_per_source", 30)
 
+    # Если подряд ZERO_LIMIT источников вернули 0 видео — скорее всего капча/нет сессии
+    ZERO_LIMIT    = 5
+    zero_streak   = 0
+    blocked       = False
+
+    def track_zeros(count: int) -> bool:
+        """Возвращает True если надо остановить скан (слишком много нулей подряд)."""
+        nonlocal zero_streak, blocked
+        if count == 0:
+            zero_streak += 1
+        else:
+            zero_streak = 0
+        if zero_streak >= ZERO_LIMIT:
+            blocked = True
+            return True
+        return False
+
     async with async_playwright() as p:
         context, browser = await _build_context(p, cfg)
         page = await context.new_page()
@@ -447,45 +464,53 @@ async def run_scan(cfg: dict,
             )
             new = add(videos)
             log(f"  #{tag} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
+            if track_zeros(len(videos)):
+                log("⛔ 5 источников подряд вернули 0 — похоже капча или нет сессии. Останавливаю скан.")
+                break
             await asyncio.sleep(random.uniform(8, 15))
 
         # ── 2. Поиск ──────────────────────────────────────────────────────────
-        log(f"\n[2/3] Поиск ({len(cfg['search_queries'])} запросов)...")
-        for query in cfg["search_queries"]:
-            log(f"  \"{query}\"...")
-            # Пробуем оба URL-формата поиска
-            search_url = (
-                f"https://www.tiktok.com/search/video?q={quote_plus(query)}"
-            )
-            videos = await _scroll_and_collect(
-                page, search_url,
-                source=f"search:{query}", target=target, cfg=cfg,
-                is_search=True
-            )
-            # Если нашли мало — пробуем второй формат
-            if len(videos) < 3:
-                log(f"  Мало результатов, пробую альтернативный URL...")
-                alt_url = (
-                    f"https://www.tiktok.com/search?q={quote_plus(query)}&type=video"
+        if not blocked:
+            log(f"\n[2/3] Поиск ({len(cfg['search_queries'])} запросов)...")
+            for query in cfg["search_queries"]:
+                log(f"  \"{query}\"...")
+                search_url = (
+                    f"https://www.tiktok.com/search/video?q={quote_plus(query)}"
                 )
-                videos2 = await _scroll_and_collect(
-                    page, alt_url,
+                videos = await _scroll_and_collect(
+                    page, search_url,
                     source=f"search:{query}", target=target, cfg=cfg,
                     is_search=True
                 )
-                videos = videos or videos2
-                if videos2:
-                    videos = videos + [v for v in videos2 if v["url"] not in {x["url"] for x in videos}]
+                # Если нашли мало — пробуем второй формат
+                if len(videos) < 3:
+                    log(f"  Мало результатов, пробую альтернативный URL...")
+                    alt_url = (
+                        f"https://www.tiktok.com/search?q={quote_plus(query)}&type=video"
+                    )
+                    videos2 = await _scroll_and_collect(
+                        page, alt_url,
+                        source=f"search:{query}", target=target, cfg=cfg,
+                        is_search=True
+                    )
+                    videos = videos or videos2
+                    if videos2:
+                        videos = videos + [v for v in videos2 if v["url"] not in {x["url"] for x in videos}]
 
-            new = add(videos)
-            log(f"  \"{query}\" → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
-            await asyncio.sleep(random.uniform(10, 18))
+                new = add(videos)
+                log(f"  \"{query}\" → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
+                if track_zeros(len(videos)):
+                    log("⛔ 5 источников подряд вернули 0 — похоже капча или нет сессии. Останавливаю скан.")
+                    break
+                await asyncio.sleep(random.uniform(10, 18))
 
         # ── 3. Подписки seed-аккаунтов ────────────────────────────────────────
-        log(f"\n[3/3] Аккаунты из ниши...")
+        if blocked:
+            log("⛔ Скан остановлен досрочно — загрузи актуальную сессию TikTok через Настройки дашборда")
+        log(f"\n[3/3] Аккаунты из ниши..." if not blocked else "")
         discovered: list[str] = []
 
-        for acc in cfg["seed_accounts"]:
+        for acc in ([] if blocked else cfg["seed_accounts"]):
             log(f"  @{acc} → подписки...")
             following = await _get_following(page, acc)
             discovered.extend(following)
@@ -498,7 +523,7 @@ async def run_scan(cfg: dict,
 
         log(f"  Уникальных аккаунтов: {len(unique_accounts)}")
 
-        for acc in cfg["seed_accounts"] + unique_accounts:
+        for acc in ([] if blocked else cfg["seed_accounts"] + unique_accounts):
             log(f"  @{acc}...")
             videos = await _scroll_and_collect(
                 page, f"https://www.tiktok.com/@{acc}",

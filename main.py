@@ -13,6 +13,7 @@ main.py — Alta Viral Scanner
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import threading
 from datetime import datetime
