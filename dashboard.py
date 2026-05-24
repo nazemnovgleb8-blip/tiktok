@@ -653,14 +653,22 @@ function syncInput(type) {
 function addTag(type) {
   const id = type==='hashtag'?'new-tag':type==='account'?'new-account':'new-query';
   const inp = document.getElementById(id);
-  const val = inp.value.trim().replace(/^[@#]/, '');
-  if (!val || store[type].includes(val)) { inp.value=''; return; }
-  store[type].push(val);
-  const prefix = type==='hashtag'?'#':type==='account'?'@':'';
-  const el = document.createElement('span');
-  el.className='tag';
-  el.innerHTML=prefix+val+'<span class="tag-rm" onclick="removeTag(this,\''+type+'\',\''+val+'\')">×</span>';
-  document.getElementById(lists[type]).appendChild(el);
+  const raw = inp.value.trim();
+  if (!raw) return;
+
+  // Разбиваем по пробелам, запятым, переносам — поддержка вставки нескольких сразу
+  const parts = raw.split(/[\s,\n]+/).map(s => s.replace(/^[#@]+/, '').trim()).filter(Boolean);
+
+  parts.forEach(function(val) {
+    if (!val || store[type].includes(val)) return;
+    store[type].push(val);
+    const prefix = type==='hashtag'?'#':type==='account'?'@':'';
+    const el = document.createElement('span');
+    el.className='tag';
+    el.innerHTML=prefix+val+'<span class="tag-rm" onclick="removeTag(this,\''+type+'\',\''+val+'\')">×</span>';
+    document.getElementById(lists[type]).appendChild(el);
+  });
+
   syncInput(type);
   inp.value='';
 }
