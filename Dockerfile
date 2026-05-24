@@ -1,25 +1,11 @@
-FROM python:3.11-slim
-
-# Системные зависимости для Playwright Chromium
-RUN apt-get update && apt-get install -y \
-    wget curl gnupg ca-certificates \
-    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
-    libcairo2 libasound2 libx11-6 libxext6 \
-    fonts-liberation fonts-noto-color-emoji \
-    libgl1 libglib2.0-0 libsm6 libxrender1 \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# Официальный образ Playwright — Chromium уже внутри, скачивать не нужно
+# Билд ускоряется с ~5 мин до ~1 мин
+FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Устанавливаем только Chromium (без Firefox и WebKit)
-RUN playwright install chromium
-RUN playwright install-deps chromium
 
 COPY . .
 
