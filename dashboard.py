@@ -671,20 +671,25 @@ def settings():
 @app.route("/settings/save", methods=["POST"])
 @_require_auth
 def settings_save():
-    c = cfg_module.load()
-    c["telegram_bot_token"] = request.form.get("telegram_bot_token", "")
-    c["telegram_chat_id"]   = request.form.get("telegram_chat_id", "")
-    c["gemini_api_key"]     = request.form.get("gemini_api_key", "")
-    c["schedule_hour"]      = int(request.form.get("schedule_hour", 9))
-    c["gemini_top_n"]       = int(request.form.get("gemini_top_n", 50))
-    c["min_score"]          = int(request.form.get("min_score", 50))
-    c["capsolver_api_key"]  = request.form.get("capsolver_api_key", "")
-    c["proxy"]              = request.form.get("proxy", "").strip()
-    c["hashtags"]      = [x.strip() for x in request.form.get("hashtags","").split(",") if x.strip()]
-    c["seed_accounts"] = [x.strip() for x in request.form.get("seed_accounts","").split(",") if x.strip()]
-    c["search_queries"]= [x.strip() for x in request.form.get("search_queries","").split("||") if x.strip()]
-    cfg_module.save(c)
-    return redirect(url_for("settings", msg="Сохранено ✓", msg_type="ok"))
+    try:
+        c = cfg_module.load()
+        c["telegram_bot_token"] = request.form.get("telegram_bot_token", "")
+        c["telegram_chat_id"]   = request.form.get("telegram_chat_id", "")
+        c["gemini_api_key"]     = request.form.get("gemini_api_key", "")
+        c["schedule_hour"]      = int(request.form.get("schedule_hour", 9))
+        c["gemini_top_n"]       = int(request.form.get("gemini_top_n", 50))
+        c["min_score"]          = int(request.form.get("min_score", 50))
+        c["capsolver_api_key"]  = request.form.get("capsolver_api_key", "")
+        c["proxy"]              = request.form.get("proxy", "").strip()
+        c["hashtags"]      = [x.strip() for x in request.form.get("hashtags","").split(",") if x.strip()]
+        c["seed_accounts"] = [x.strip() for x in request.form.get("seed_accounts","").split(",") if x.strip()]
+        c["search_queries"]= [x.strip() for x in request.form.get("search_queries","").split("||") if x.strip()]
+        cfg_module.save(c)
+        logger.info(f"Настройки сохранены в {cfg_module.CONFIG_FILE}")
+        return redirect(url_for("settings", msg=f"Сохранено ✓ ({cfg_module.CONFIG_FILE})", msg_type="ok"))
+    except Exception as e:
+        logger.exception(f"Ошибка сохранения настроек: {e}")
+        return redirect(url_for("settings", msg=f"Ошибка сохранения: {e}", msg_type="err"))
 
 
 @app.route("/run", methods=["POST"])

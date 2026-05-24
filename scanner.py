@@ -438,8 +438,13 @@ async def run_scan(cfg: dict,
 
         if not is_logged:
             if _is_headless():
-                log("⚠️  Сессия устарела на сервере — загрузи tiktok_session.json через дашборд")
-                log("    Продолжаю без авторизации — часть данных может быть недоступна")
+                log("⛔ Сессия устарела или отсутствует — скан отменён.")
+                log("   Загрузи актуальный tiktok_session.json через Настройки дашборда.")
+                if browser:
+                    await browser.close()
+                else:
+                    await context.close()
+                return [], []
             else:
                 log("⚠️  Сессия устарела — залогинься в браузере и нажми Enter.")
                 input("    → Enter после логина... ")
