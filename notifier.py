@@ -1,6 +1,6 @@
 """
 notifier.py — Telegram уведомления
-Минималистичный дайджест: чистый текст, минимум эмодзи, максимум читабельности
+Единый формат для всех видео: счёт + метрики + хук + адаптация + ссылка
 """
 import logging
 import requests
@@ -41,7 +41,68 @@ def _cat(cat: str) -> str:
     }.get(cat, "вирал")
 
 
-def send_daily_digest(videos: list[dict], scan_stats: dict, cfg: dict):
+def _get_dashboard_url(cfg: dict) -> str:
+    """Возвращает актуальный URL дашборда — сначала из живого туннеля."""
+    # Сначала пробуем live-URL от запущенного туннеля
+    try:
+        import tunnel
+        live = tunnel.get_url()
+        if live and live.startswith("http"):
+            return live
+    except Exception:
+        pass
+    # Fallback: Railway env → config
+    import os
+    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if railway:
+        return f"https://{railway}"
+    url = cfg.get("dashboard_url", "").strip()
+    if url:
+        return url
+    port = cfg.get("dashboard_port", 5001)
+    return f"http://localhost:{port}"
+
+
+def _fmt_video(i: int, v: dict, show_source: bool = True) -> list[str]:
+    """Форматирует одно видео в строки Telegram."""
+    score  = v.get("score", 0)
+    views  = _fmt(v.get("views", 0))
+    subs   = _fmt(v.get("followers", 0))
+    source = v.get("source", "")
+    url    = v.get("url", "")
+    cat    = _cat(v.get("category", "вирал"))
+    hook   = (v.get("gemini_hook") or v.get("hook", "")).strip()
+    adapt  = (v.get("gemini_adaptation") or v.get("adaptation", "")).strip()
+
+    lines = []
+    lines.append("")
+
+    # Строка 1: номер · счёт · категория
+    lines.append(f"<b>#{i}  {score:.0f}x</b>  ·  {cat}")
+
+    # Строка 2: метрики + источник
+    meta = f"{views} просм  ·  {subs} подп"
+    if show_source and source:
+        # Укорачиваем длинный source
+        src_short = source.replace("search:", "").replace("account:", "@").replace("fyp", "FYP")
+        meta += f"  ·  {src_short}"
+    lines.append(meta)
+
+    # Строка 3: хук (курсив)
+    if hook:
+        hook_short = hook[:160] + "…" if len(hook) > 160 else hook
+        lines.append(f"<i>{hook_short}</i>")
+
+    # Строка 4: адаптация
+    if adapt:
+        adapt_short = adapt[:180] + "…" if len(adapt) > 180 else adapt
+        lines.append(adapt_short)
+
+    lines.append(f'<a href="{url}">Смотреть →</a>')
+    return lines
+
+
+def send_daily_digest(videos: list[dict], scan_stats: dict, cfg: dict, scan_id: int = None):
     token   = cfg.get("telegram_bot_token", "")
     chat_id = cfg.get("telegram_chat_id", "")
     if not token or not chat_id:
@@ -51,22 +112,35 @@ def send_daily_digest(videos: list[dict], scan_stats: dict, cfg: dict):
     from datetime import date
     today = date.today().strftime("%d.%m.%Y")
 
+    # ── Фильтр по минимальным просмотрам ──────────────────────────────────────
+    min_views = cfg.get("min_views", 50_000)
+    filtered = [v for v in videos if v.get("views", 0) >= min_views]
+
+    if not filtered:
+        # Если ни одного — берём топ без фильтра (чтобы дайджест не был пустым)
+        logger.warning(f"Ни одного видео с {_fmt(min_views)}+ просмотрами — показываю всё")
+        filtered = videos
+
     total   = scan_stats.get("total_relevant", 0)
     ultra   = scan_stats.get("ultra", 0)
     best    = scan_stats.get("max_score", 0)
 
-    dashboard_url = cfg.get("dashboard_url", "").strip()
-    if not dashboard_url:
-        port = cfg.get("dashboard_port", 5001)
-        dashboard_url = f"http://localhost:{port}"
+    base_url = _get_dashboard_url(cfg)
+    # Ссылка ведёт на конкретный скан если передан scan_id, иначе на главную
+    if scan_id:
+        report_url = f"{base_url.rstrip('/')}/scan/{scan_id}"
+    else:
+        report_url = base_url
 
     lines = []
 
     # ── Шапка ─────────────────────────────────────────────────────────────────
     lines.append(f"<b>Alta Viral Scout</b>  ·  {today}")
     lines.append(
-        f"Видео: <b>{total}</b>  ·  сверхвирал 500x+: <b>{ultra}</b>  ·  рекорд: <b>{best:.0f}x</b>"
+        f"Видео: <b>{total}</b>  ·  500x+: <b>{ultra}</b>  ·  рекорд: <b>{best:.0f}x</b>"
     )
+    if min_views > 0:
+        lines.append(f"В дайджесте: {_fmt(min_views)}+ просмотров  ·  {len(filtered)} видео")
 
     # ── Топ-3 ─────────────────────────────────────────────────────────────────
     lines.append("")
@@ -74,59 +148,30 @@ def send_daily_digest(videos: list[dict], scan_stats: dict, cfg: dict):
     lines.append("<b>Топ-3 — копировать сегодня</b>")
     lines.append("─────────────────────────────")
 
-    for i, v in enumerate(videos[:3], 1):
-        score  = v.get("score", 0)
-        views  = _fmt(v.get("views", 0))
-        subs   = _fmt(v.get("followers", 0))
-        source = v.get("source", "")
-        url    = v.get("url", "")
-        cat    = _cat(v.get("category", "вирал"))
-        hook   = (v.get("gemini_hook") or v.get("hook", "")).strip()
-        adapt  = (v.get("gemini_adaptation") or v.get("adaptation", "")).strip()
+    for i, v in enumerate(filtered[:3], 1):
+        lines.extend(_fmt_video(i, v))
 
-        lines.append("")
-        # Строка 1: номер, счёт, категория
-        lines.append(f"<b>#{i}  {score:.0f}x</b>  ·  {cat}")
-        # Строка 2: метрики
-        lines.append(f"{views} просм  ·  {subs} подп  ·  {source}")
-        # Строка 3: хук (если есть)
-        if hook:
-            hook_short = hook[:130] + "…" if len(hook) > 130 else hook
-            lines.append(f"<i>{hook_short}</i>")
-        # Строка 4: адаптация (если есть)
-        if adapt:
-            adapt_short = adapt[:150] + "…" if len(adapt) > 150 else adapt
-            lines.append(adapt_short)
-        lines.append(f'<a href="{url}">Смотреть →</a>')
-
-    # ── Топ 4–10 (компактно) ──────────────────────────────────────────────────
-    rest = videos[3:10]
+    # ── Топ 4–10 (тот же формат, без сокращений) ──────────────────────────────
+    rest = filtered[3:10]
     if rest:
         lines.append("")
         lines.append("─────────────────────────────")
         lines.append("<b>Топ 4–10</b>")
         lines.append("─────────────────────────────")
-        lines.append("")
+
         for i, v in enumerate(rest, 4):
-            score  = v.get("score", 0)
-            views  = _fmt(v.get("views", 0))
-            source = v.get("source", "")
-            url    = v.get("url", "")
-            lines.append(
-                f"<b>#{i}</b>  ·  {score:.0f}x  ·  {views}  ·  {source}"
-                f'  ·  <a href="{url}">→</a>'
-            )
+            lines.extend(_fmt_video(i, v))
 
     # ── Футер ─────────────────────────────────────────────────────────────────
     lines.append("")
     lines.append("─────────────────────────────")
     lines.append(
-        f'<a href="{dashboard_url}">Полный отчёт с анализом →</a>'
+        f'<a href="{report_url}">Полный отчёт с анализом →</a>'
         f"  ·  следующий скан в 9:00"
     )
 
     _send(token, chat_id, "\n".join(lines))
-    logger.info(f"Дайджест отправлен ({len(videos[:10])} видео, ссылка: {dashboard_url})")
+    logger.info(f"Дайджест отправлен ({len(filtered[:10])} видео, ссылка: {report_url})")
 
 
 def check_and_send_alerts(videos: list[dict], cfg: dict):
@@ -141,11 +186,7 @@ def check_and_send_alerts(videos: list[dict], cfg: dict):
         return
 
     hits.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    dashboard_url = cfg.get("dashboard_url", "").strip()
-    if not dashboard_url:
-        port = cfg.get("dashboard_port", 5001)
-        dashboard_url = f"http://localhost:{port}"
+    dashboard_url = _get_dashboard_url(cfg)
 
     lines = [
         f"<b>Сверхвирал  ·  {len(hits)} находок  ·  {ALERT_THRESHOLD:,}x+</b>",
@@ -158,9 +199,7 @@ def check_and_send_alerts(videos: list[dict], cfg: dict):
         source = v.get("source", "")
         url    = v.get("url", "")
         author = v.get("author", "")
-        lines.append(
-            f"<b>{score:.0f}x</b>  ·  @{author}  ·  {source}"
-        )
+        lines.append(f"<b>{score:.0f}x</b>  ·  @{author}  ·  {source}")
         lines.append(
             f"{views} просм  ·  {subs} подп  ·  "
             f'<a href="{url}">смотреть →</a>'

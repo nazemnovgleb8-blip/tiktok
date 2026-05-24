@@ -1,6 +1,12 @@
 """
-tunnel.py — публичный туннель для дашборда
-Приоритет: ngrok (стабильный, бесплатный постоянный домен) → cloudflared (fallback)
+tunnel.py — публичный туннель для локального дашборда
+
+Приоритет:
+  1. DASHBOARD_URL env-var (ручной URL — самый надёжный)
+  2. ngrok (стабильный, бесплатный постоянный домен)
+  3. Инструкция пользователю (cloudflared убран — ненадёжен)
+
+На Railway туннель не нужен — там уже есть публичный HTTPS URL.
 """
 import re
 import subprocess
@@ -34,89 +40,75 @@ def _save_url(url: str, on_ready=None):
         c["dashboard_url"] = url
         cfg_module.save(c)
     except Exception as e:
-        logger.warning(f"Не удалось сохранить URL: {e}")
+        logger.warning(f"Не удалось сохранить URL туннеля: {e}")
     if on_ready:
         on_ready(url)
 
 
-def _find_bin(names: list) -> str | None:
-    for n in names:
-        for prefix in ["/opt/homebrew/bin/", "/usr/local/bin/", ""]:
-            p = prefix + n
-            if os.path.exists(p) or "/" not in p:
-                try:
-                    subprocess.run([p, "--version"],
-                                   capture_output=True, timeout=3)
-                    return p
-                except Exception:
-                    pass
+def _find_ngrok() -> str | None:
+    """Ищет ngrok в стандартных путях."""
+    candidates = [
+        "/opt/homebrew/bin/ngrok",
+        "/usr/local/bin/ngrok",
+        os.path.expanduser("~/bin/ngrok"),
+        "ngrok",  # если в PATH
+    ]
+    for path in candidates:
+        try:
+            result = subprocess.run(
+                [path, "version"],
+                capture_output=True, timeout=3
+            )
+            if result.returncode == 0:
+                return path
+        except Exception:
+            pass
     return None
 
 
-# ── ngrok ─────────────────────────────────────────────────────────────────────
+def _poll_ngrok_api(on_ready=None) -> bool:
+    """Опрашивает ngrok API на localhost:4040, возвращает True если нашёл URL."""
+    for _ in range(20):   # до 10 секунд
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:4040/api/tunnels", timeout=1
+            ) as r:
+                data = json.loads(r.read())
+                for t in data.get("tunnels", []):
+                    u = t.get("public_url", "")
+                    if u.startswith("https://"):
+                        _save_url(u, on_ready)
+                        return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
 
 def _run_ngrok(bin_path: str, port: int, on_ready=None):
-    """Запускает ngrok и получает URL через его локальный API."""
-    cmd = [bin_path, "http", str(port), "--log", "stdout",
-           "--log-format", "json"]
-    logger.info(f"Запускаю ngrok: {' '.join(cmd)}")
+    """Запускает ngrok и получает публичный URL через API (ngrok v3+)."""
+    cmd = [bin_path, "http", str(port)]
+    logger.info(f"Запускаю ngrok на порту {port}...")
 
     while True:
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             global _tunnel_proc
             _tunnel_proc = proc
 
-            url_found = False
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                logger.debug(f"[ngrok] {line}")
+            # Ждём пока ngrok поднимет туннель и опрашиваем API
+            time.sleep(2)
+            if _poll_ngrok_api(on_ready):
+                # Держим процесс живым
+                proc.wait()
+            else:
+                logger.warning("ngrok запустился, но URL не получен через API за 10 сек")
+                proc.wait()
 
-                # Парсим JSON-лог ngrok
-                try:
-                    obj = json.loads(line)
-                    # Ищем URL в разных полях лога
-                    url = (obj.get("url") or obj.get("URL") or
-                           obj.get("Addr") or "")
-                    if not url:
-                        msg = obj.get("msg", "")
-                        m = re.search(r"https://[^\s\"]+\.ngrok[^\s\"]*", msg)
-                        if m:
-                            url = m.group(0)
-                    if url and url.startswith("https://") and not url_found:
-                        url_found = True
-                        _save_url(url, on_ready)
-                except json.JSONDecodeError:
-                    # Текстовый лог — ищем URL напрямую
-                    m = re.search(r"https://[^\s]+\.ngrok[^\s]*", line)
-                    if m and not url_found:
-                        url_found = True
-                        _save_url(m.group(0), on_ready)
-
-                # Если URL ещё не нашли — спрашиваем API ngrok
-                if not url_found:
-                    try:
-                        with urllib.request.urlopen(
-                            "http://127.0.0.1:4040/api/tunnels", timeout=2
-                        ) as r:
-                            data = json.loads(r.read())
-                            for t in data.get("tunnels", []):
-                                u = t.get("public_url", "")
-                                if u.startswith("https://"):
-                                    url_found = True
-                                    _save_url(u, on_ready)
-                                    break
-                    except Exception:
-                        pass
-
-            proc.wait()
             logger.warning("ngrok завершился — перезапуск через 5 сек...")
 
         except Exception as e:
@@ -125,70 +117,50 @@ def _run_ngrok(bin_path: str, port: int, on_ready=None):
         time.sleep(5)
 
 
-# ── cloudflared fallback ───────────────────────────────────────────────────────
-
-def _run_cloudflared(bin_path: str, port: int, on_ready=None):
-    """Запускает cloudflared quick tunnel."""
-    cmd = [bin_path, "tunnel", "--url", f"http://127.0.0.1:{port}"]
-    logger.info(f"Запускаю cloudflared: {' '.join(cmd)}")
-    url_pattern = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
-
-    while True:
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-            )
-            global _tunnel_proc
-            _tunnel_proc = proc
-
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    logger.debug(f"[cf] {line}")
-                m = url_pattern.search(line)
-                if m:
-                    _save_url(m.group(0), on_ready)
-
-            proc.wait()
-            logger.warning("cloudflared завершился — перезапуск через 5 сек...")
-
-        except Exception as e:
-            logger.error(f"Ошибка cloudflared: {e}")
-
-        time.sleep(5)
-
-
-# ── Главная точка входа ────────────────────────────────────────────────────────
-
 def start(port: int = 5001, on_ready=None):
-    """Запускает туннель в фоновом потоке. ngrok → cloudflared (fallback)."""
-
-    time.sleep(4)   # даём Flask подняться
-
-    ngrok_bin = _find_bin(["ngrok"])
-    cf_bin    = _find_bin(["cloudflared"])
-
-    if not ngrok_bin and not cf_bin:
-        logger.warning(
-            "Туннель не найден. Установи ngrok:\n"
-            "  brew install ngrok/ngrok/ngrok\n"
-            "  ngrok config add-authtoken <твой_токен>\n"
-            "Дашборд доступен только локально."
-        )
+    """
+    Запускает туннель в фоновом потоке.
+    На Railway — не нужен (там уже публичный URL).
+    """
+    # Если задан ручной URL — туннель не нужен
+    manual_url = os.environ.get("DASHBOARD_URL", "").strip()
+    if manual_url:
+        logger.info(f"DASHBOARD_URL задан вручную: {manual_url}")
+        _save_url(manual_url, on_ready)
         return
 
-    if ngrok_bin:
-        runner = lambda: _run_ngrok(ngrok_bin, port, on_ready)
-        name   = "ngrok-tunnel"
-    else:
-        runner = lambda: _run_cloudflared(cf_bin, port, on_ready)
-        name   = "cf-tunnel"
+    time.sleep(4)  # даём Flask подняться
 
-    t = threading.Thread(target=runner, daemon=True, name=name)
-    t.start()
+    ngrok_bin = _find_ngrok()
+    if ngrok_bin:
+        t = threading.Thread(
+            target=_run_ngrok,
+            args=(ngrok_bin, port, on_ready),
+            daemon=True, name="ngrok-tunnel"
+        )
+        t.start()
+        return
+
+    # ngrok не найден — объясняем как установить
+    logger.warning(
+        "\n" + "━" * 55 +
+        "\n  Дашборд запущен локально, но публичный URL недоступен." +
+        "\n  Чтобы Telegram-ссылки работали:" +
+        "\n" +
+        "\n  Вариант 1 — ngrok (рекомендуется):" +
+        "\n    brew install ngrok/ngrok/ngrok" +
+        "\n    ngrok config add-authtoken <твой_токен>" +
+        "\n    (регистрация бесплатна: https://ngrok.com)" +
+        "\n" +
+        "\n  Вариант 2 — вручную в настройках дашборда:" +
+        "\n    Настройки → 'URL дашборда' → вставь любой публичный URL" +
+        "\n    (напр. Railway URL: https://tiktok-production-xxxx.up.railway.app)" +
+        "\n" + "━" * 55
+    )
+
+    # Ставим localhost как fallback чтобы ссылки хотя бы были
+    local_url = f"http://localhost:{port}"
+    _save_url(local_url, on_ready)
 
 
 def stop():

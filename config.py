@@ -97,9 +97,16 @@ def load() -> dict:
         port = int(os.environ.get("PORT", data.get("dashboard_port", 5001)))
         data["dashboard_port"] = port
         data["dashboard_host"] = "0.0.0.0"
-        railway_url = os.environ.get("RAILWAY_STATIC_URL", "")
-        if railway_url:
-            data["dashboard_url"] = f"https://{railway_url}"
+        # Railway даёт RAILWAY_PUBLIC_DOMAIN = "myapp.up.railway.app"
+        for rkey in ("RAILWAY_PUBLIC_DOMAIN", "RAILWAY_SERVICE_DOMAIN",
+                     "RAILWAY_STATIC_URL"):
+            railway_domain = os.environ.get(rkey, "").strip()
+            if railway_domain:
+                data["dashboard_url"] = (
+                    railway_domain if railway_domain.startswith("http")
+                    else f"https://{railway_domain}"
+                )
+                break
         data["session_file"] = os.path.join(DATA_DIR, "tiktok_session.json")
         updated = True
 
@@ -111,11 +118,12 @@ def load() -> dict:
         "PROXY":               "proxy",
         "DASHBOARD_URL":       "dashboard_url",
         "MIN_SCORE":           "min_score",
+        "MIN_VIEWS":           "min_views",
     }
     for env_key, cfg_key in _env_map.items():
         val = os.environ.get(env_key, "").strip()
         if val:
-            data[cfg_key] = int(val) if cfg_key == "min_score" else val
+            data[cfg_key] = int(val) if cfg_key in ("min_score", "min_views") else val
 
     if updated:
         save(data)

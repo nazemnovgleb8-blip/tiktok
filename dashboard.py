@@ -298,18 +298,78 @@ document.getElementById('loginModal').addEventListener('click',function(e){
 </body>
 </html>"""
 
-# ── Главная страница ──────────────────────────────────────────────────────────
-HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
+# ── Общий макрос таблицы видео ────────────────────────────────────────────────
+_VIDEO_TABLE = """
+{% macro video_table(videos) %}
+{% if videos %}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th style="width:40px">#</th>
+      <th style="width:90px">Score</th>
+      <th style="width:130px">Категория</th>
+      <th style="width:110px">Просмотры</th>
+      <th style="width:110px">Подписчики</th>
+      <th style="width:120px">Источник</th>
+      <th style="min-width:200px">Хук</th>
+      <th style="min-width:240px">Адаптация для Alta</th>
+      <th style="width:90px">Ссылка</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for v in videos %}
+  <tr>
+    <td style="color:#aaa;font-size:13px">{{ loop.index }}</td>
+    <td>
+      {% if v.score >= 500 %}<span class="score-ultra">{{ "%.0f"|format(v.score) }}x</span>
+      {% elif v.score >= 100 %}<span class="score-high">{{ "%.0f"|format(v.score) }}x</span>
+      {% else %}<span class="score-low">{{ "%.0f"|format(v.score) }}x</span>{% endif %}
+    </td>
+    <td>
+      {% set cat_v = v.category or 'вирал' %}
+      {% if cat_v == 'брендинг' %}<span class="badge badge-brand">🎨 брендинг</span>
+      {% elif cat_v == 'сайты' %}<span class="badge badge-site">🌐 сайты</span>
+      {% elif cat_v == 'ии-контент' %}<span class="badge badge-ai">🤖 ии-контент</span>
+      {% else %}<span class="badge badge-viral">⚡ вирал</span>{% endif %}
+    </td>
+    <td style="font-weight:500">{{ "{:,}".format(v.views).replace(",", " ") }}</td>
+    <td style="color:#6e6e73">{{ "{:,}".format(v.followers).replace(",", " ") }}</td>
+    <td style="font-size:12px;color:#6e6e73;white-space:nowrap">
+      {{ v.source | replace('search:','') | replace('account:','@') | replace('fyp','FYP') }}
+    </td>
+    <td style="font-size:13px;color:#3a3a3a;line-height:1.4">{{ v.gemini_hook or '—' }}</td>
+    <td style="font-size:13px;color:#0d0d0d;line-height:1.4">{{ v.gemini_adaptation or '—' }}</td>
+    <td>
+      <a href="{{ v.url }}" target="_blank" class="btn btn-ghost btn-sm"
+         style="padding:5px 12px;font-size:12px">▶ смотреть</a>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="empty">
+  <div style="font-size:32px;margin-bottom:12px">📭</div>
+  Нет данных — запусти первое сканирование
+</div>
+{% endif %}
+{% endmacro %}
+"""
+
+# ── Главная страница — вся библиотека видео ───────────────────────────────────
+HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + """
 <div class="page">
   <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:32px">
     <div>
-      <h1>Viral Scout</h1>
-      <p class="subtitle">Последнее сканирование: {{ scan.started_at[:16] if scan else '—' }}</p>
+      <h1>Библиотека</h1>
+      <p class="subtitle">Все уникальные видео за всё время · {{ stats.total or 0 }} роликов · {{ stats.authors or 0 }} авторов</p>
     </div>
     <form method="post" action="/run">
       <button class="btn btn-orange" type="submit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        Запустить сейчас
+        Запустить скан
       </button>
     </form>
   </div>
@@ -320,12 +380,12 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
 
   <div class="cards">
     <div class="card">
-      <div class="card-label">Просканировано</div>
+      <div class="card-label">Всего видео</div>
       <div class="card-value black">{{ stats.total or '—' }}</div>
     </div>
     <div class="card">
-      <div class="card-label">Score {{ cfg_min }}x+</div>
-      <div class="card-value green">{{ stats.total or '—' }}</div>
+      <div class="card-label">Авторов</div>
+      <div class="card-value green">{{ stats.authors or '—' }}</div>
     </div>
     <div class="card">
       <div class="card-label">Сверхвирал 500x+</div>
@@ -339,7 +399,7 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
 
   <div class="section">
     <div class="section-header">
-      <h2 style="margin:0">Топ видео</h2>
+      <h2 style="margin:0">Все ролики</h2>
       <div class="filter-chips">
         <a href="?cat=all"        class="chip {{ 'active' if cat=='all' else '' }}">Все</a>
         <a href="?cat=брендинг"   class="chip {{ 'active' if cat=='брендинг' else '' }}">🎨 Брендинг</a>
@@ -348,74 +408,16 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
         <a href="?cat=вирал"      class="chip {{ 'active' if cat=='вирал' else '' }}">⚡ Вирал</a>
       </div>
     </div>
-
-    {% if videos %}
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:40px">#</th>
-          <th style="width:90px">Score</th>
-          <th style="width:130px">Категория</th>
-          <th style="width:110px">Просмотры</th>
-          <th style="width:110px">Подписчики</th>
-          <th style="width:120px">Источник</th>
-          <th style="min-width:200px">Хук</th>
-          <th style="min-width:240px">Адаптация для Alta</th>
-          <th style="width:90px">Ссылка</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for v in videos %}
-      <tr>
-        <td style="color:#aaa;font-size:13px">{{ loop.index }}</td>
-        <td>
-          {% if v.score >= 500 %}
-            <span class="score-ultra">{{ "%.0f"|format(v.score) }}x</span>
-          {% elif v.score >= 100 %}
-            <span class="score-high">{{ "%.0f"|format(v.score) }}x</span>
-          {% else %}
-            <span class="score-low">{{ "%.0f"|format(v.score) }}x</span>
-          {% endif %}
-        </td>
-        <td>
-          {% set cat_v = v.category or 'вирал' %}
-          {% if cat_v == 'брендинг' %}<span class="badge badge-brand">🎨 брендинг</span>
-          {% elif cat_v == 'сайты' %}<span class="badge badge-site">🌐 сайты</span>
-          {% elif cat_v == 'ии-контент' %}<span class="badge badge-ai">🤖 ии-контент</span>
-          {% else %}<span class="badge badge-viral">⚡ вирал</span>{% endif %}
-        </td>
-        <td style="font-weight:500">{{ "{:,}".format(v.views).replace(",", " ") }}</td>
-        <td style="color:#6e6e73">{{ "{:,}".format(v.followers).replace(",", " ") }}</td>
-        <td style="font-size:12px;color:#6e6e73;white-space:nowrap">{{ v.source }}</td>
-        <td style="font-size:13px;color:#3a3a3a;line-height:1.4">{{ v.gemini_hook or '—' }}</td>
-        <td style="font-size:13px;color:#0d0d0d;line-height:1.4">{{ v.gemini_adaptation or '—' }}</td>
-        <td>
-          <a href="{{ v.url }}" target="_blank" class="btn btn-ghost btn-sm"
-             style="padding:5px 12px;font-size:12px">
-            ▶ смотреть
-          </a>
-        </td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-    <div class="empty">
-      <div style="font-size:32px;margin-bottom:12px">📭</div>
-      Нет данных — запусти первое сканирование
-    </div>
-    {% endif %}
+    {{ video_table(videos) }}
   </div>
 </div>
 """)
 
-# ── История ───────────────────────────────────────────────────────────────────
+# ── История сканирований ──────────────────────────────────────────────────────
 HISTORY_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
 <div class="page">
   <h1>История сканирований</h1>
-  <p class="subtitle">Все запуски системы</p>
+  <p class="subtitle">Все запуски — нажми чтобы открыть выборку</p>
 
   <div class="section">
     {% if scans %}
@@ -425,19 +427,19 @@ HISTORY_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
         <span style="font-weight:600">#{{ s.id }}</span>
         <span style="color:#6e6e73;font-size:13px;margin-left:12px">{{ s.started_at[:16] }}</span>
       </div>
-      <div style="color:#6e6e73;font-size:13px;width:150px">
-        📦 {{ s.total_scraped or 0 }} видео
+      <div style="color:#6e6e73;font-size:13px;width:180px">
+        {{ s.total_scraped or 0 }} просканировано · <b style="color:#0d0d0d">{{ s.total_relevant or 0 }}</b> прошли
       </div>
-      <div style="width:130px">
+      <div style="width:120px">
         {% if s.status == 'done' %}
-          <span class="scan-status-done">✓ Готово ({{ s.total_relevant }})</span>
+          <span class="scan-status-done">✓ Готово</span>
         {% elif 'error' in s.status %}
           <span class="scan-status-err">✗ Ошибка</span>
         {% else %}
           <span class="scan-status-run">⟳ В процессе</span>
         {% endif %}
       </div>
-      <a href="/?scan_id={{ s.id }}" class="btn btn-ghost btn-sm">Смотреть</a>
+      <a href="/scan/{{ s.id }}" class="btn btn-ghost btn-sm">Открыть →</a>
     </div>
     {% endfor %}
     {% else %}
@@ -446,6 +448,52 @@ HISTORY_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
       История пуста
     </div>
     {% endif %}
+  </div>
+</div>
+""")
+
+# ── Страница конкретного скана ────────────────────────────────────────────────
+SCAN_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + """
+<div class="page">
+  <div style="display:flex;align-items:center;gap:16px;margin-bottom:32px">
+    <a href="/history" class="btn btn-ghost btn-sm">← История</a>
+    <div>
+      <h1>Скан #{{ scan.id }}</h1>
+      <p class="subtitle">{{ scan.started_at[:16] }} · {{ scan.total_scraped or 0 }} просканировано · {{ scan.total_relevant or 0 }} прошли фильтр</p>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Видео в скане</div>
+      <div class="card-value black">{{ stats.total or '—' }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Релевантных (7+)</div>
+      <div class="card-value green">{{ stats.relevant or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Сверхвирал 500x+</div>
+      <div class="card-value orange">{{ stats.ultra or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Макс. Score</div>
+      <div class="card-value purple">{{ "%.0f"|format(stats.max_score) if stats.max_score else '—' }}x</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <h2 style="margin:0">Видео из этого скана</h2>
+      <div class="filter-chips">
+        <a href="?cat=all"        class="chip {{ 'active' if cat=='all' else '' }}">Все</a>
+        <a href="?cat=брендинг"   class="chip {{ 'active' if cat=='брендинг' else '' }}">🎨 Брендинг</a>
+        <a href="?cat=сайты"      class="chip {{ 'active' if cat=='сайты' else '' }}">🌐 Сайты</a>
+        <a href="?cat=ии-контент" class="chip {{ 'active' if cat=='ии-контент' else '' }}">🤖 ИИ-контент</a>
+        <a href="?cat=вирал"      class="chip {{ 'active' if cat=='вирал' else '' }}">⚡ Вирал</a>
+      </div>
+    </div>
+    {{ video_table(videos) }}
   </div>
 </div>
 """)
@@ -477,6 +525,10 @@ SETTINGS_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
         <label>Время дайджеста (час, 0–23)</label>
         <input type="number" name="schedule_hour" value="{{ cfg.schedule_hour }}" min="0" max="23">
       </div>
+      <div class="form-row">
+        <label>URL дашборда <span style="color:#6e6e73;font-size:11px">— вставь публичный адрес (Railway / ngrok) для ссылок в Telegram</span></label>
+        <input type="text" name="dashboard_url" value="{{ cfg.get('dashboard_url','') }}" placeholder="https://tiktok-production-xxxx.up.railway.app">
+      </div>
     </div>
 
     <div class="section">
@@ -492,6 +544,10 @@ SETTINGS_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
       <div class="form-row">
         <label>Минимальный Score</label>
         <input type="number" name="min_score" value="{{ cfg.min_score }}" min="5">
+      </div>
+      <div class="form-row">
+        <label>Минимальные просмотры в дайджест <span style="color:#6e6e73;font-size:11px">— видео с меньшим числом не попадут в Telegram</span></label>
+        <input type="number" name="min_views" value="{{ cfg.get('min_views', 50000) }}" min="0" step="1000">
       </div>
       <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
         <label>CapSolver API Key <span style="color:#1a7a3c;font-size:11px">— $0.50 бесплатно</span></label>
@@ -625,25 +681,18 @@ function removeTag(el, type, val) {
 @app.route("/")
 @_require_auth
 def home():
+    """Библиотека — все уникальные видео за всё время."""
     try:
         msg      = request.args.get("msg", "")
         msg_type = request.args.get("msg_type", "ok")
         cat      = request.args.get("cat", "all")
-        scan_id  = request.args.get("scan_id")
 
-        scan   = db.get_scan_by_id(int(scan_id)) if scan_id else db.get_latest_scan()
-        stats  = db.get_stats(scan["id"]) if scan else {}
-        videos = db.get_scan_videos(scan["id"], limit=200) if scan else []
-
-        if cat and cat != "all":
-            videos = [v for v in videos if v.get("category") == cat]
-
-        cfg_data = cfg_module.load()
-        cfg_min  = cfg_data.get("min_score", 50)
+        stats  = db.get_all_videos_stats()
+        videos = db.get_all_videos(limit=500, cat=cat if cat != "all" else None)
 
         return render_template_string(HOME_HTML,
-            page="home", scan=scan, stats=stats or {}, videos=videos or [],
-            msg=msg, msg_type=msg_type, cat=cat, cfg_min=cfg_min)
+            page="home", stats=stats or {}, videos=videos or [],
+            msg=msg, msg_type=msg_type, cat=cat)
     except Exception as e:
         logger.exception(f"Ошибка главной страницы: {e}")
         return "<h2>Временная ошибка</h2><p>Обнови страницу через минуту.</p>", 500
@@ -654,6 +703,27 @@ def home():
 def history():
     scans = db.get_recent_scans(50)
     return render_template_string(HISTORY_HTML, page="history", scans=scans)
+
+
+@app.route("/scan/<int:scan_id>")
+@_require_auth
+def scan_detail(scan_id):
+    """Детальный отчёт по конкретному скану."""
+    try:
+        cat    = request.args.get("cat", "all")
+        scan   = db.get_scan_by_id(scan_id)
+        if not scan:
+            return redirect(url_for("history"))
+        stats  = db.get_stats(scan_id)
+        videos = db.get_scan_videos(scan_id, limit=300)
+        if cat and cat != "all":
+            videos = [v for v in videos if v.get("category") == cat]
+        return render_template_string(SCAN_HTML,
+            page="history", scan=scan, stats=stats or {},
+            videos=videos or [], cat=cat)
+    except Exception as e:
+        logger.exception(f"Ошибка страницы скана: {e}")
+        return "<h2>Ошибка</h2>", 500
 
 
 @app.route("/settings")
@@ -678,8 +748,12 @@ def settings_save():
         c["gemini_api_key"]     = request.form.get("gemini_api_key", "")
         c["schedule_hour"]      = int(request.form.get("schedule_hour", 9))
         c["gemini_top_n"]       = int(request.form.get("gemini_top_n", 50))
-        c["min_score"]          = int(request.form.get("min_score", 50))
+        c["min_score"]          = int(request.form.get("min_score", 10))
+        c["min_views"]          = int(request.form.get("min_views", 50000))
         c["capsolver_api_key"]  = request.form.get("capsolver_api_key", "")
+        dashboard_url = request.form.get("dashboard_url", "").strip()
+        if dashboard_url:
+            c["dashboard_url"] = dashboard_url
         c["proxy"]              = request.form.get("proxy", "").strip()
         c["hashtags"]      = [x.strip() for x in request.form.get("hashtags","").split(",") if x.strip()]
         c["seed_accounts"] = [x.strip() for x in request.form.get("seed_accounts","").split(",") if x.strip()]

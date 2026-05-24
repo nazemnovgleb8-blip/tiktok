@@ -77,6 +77,16 @@ def init():
         )
         """)
 
+        # Пул аккаунтов из ниши — растёт со временем
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS niche_accounts (
+            username    TEXT PRIMARY KEY,
+            discovered_at TEXT,
+            last_scanned  TEXT,
+            scan_count    INTEGER DEFAULT 0
+        )
+        """)
+
 
 def start_scan() -> int:
     with get_conn() as conn:
@@ -134,6 +144,42 @@ def update_gemini(url: str, relevance: int, hook: str, adaptation: str,
                WHERE url=?""",
             (relevance, hook, adaptation, category, why_viral, priority, url)
         )
+
+
+def get_all_videos(limit: int = 1000, cat: str = None, min_views: int = 0) -> list:
+    """Все уникальные видео по всем сканам, дедуплицированные по URL."""
+    with get_conn() as conn:
+        where = ["1=1"]
+        params = []
+        if cat and cat != "all":
+            where.append("category = ?")
+            params.append(cat)
+        if min_views > 0:
+            where.append("views >= ?")
+            params.append(min_views)
+        where_sql = " AND ".join(where)
+        rows = conn.execute(f"""
+            SELECT * FROM videos
+            WHERE {where_sql}
+            ORDER BY score DESC
+            LIMIT ?
+        """, params + [limit]).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_videos_stats() -> dict:
+    """Статистика по всей библиотеке видео."""
+    with get_conn() as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(DISTINCT author) as authors,
+                MAX(score) as max_score,
+                SUM(CASE WHEN score >= 500 THEN 1 ELSE 0 END) as ultra,
+                SUM(CASE WHEN gemini_relevance >= 7 THEN 1 ELSE 0 END) as relevant
+            FROM videos
+        """).fetchone()
+    return dict(row) if row else {}
 
 
 def get_scan_videos(scan_id: int, limit: int = 500) -> list:
@@ -208,6 +254,52 @@ def kv_get(key: str, default: str = "") -> str:
             "SELECT value FROM kv_store WHERE key=?", (key,)
         ).fetchone()
     return row[0] if row else default
+
+
+def add_niche_accounts(usernames: list[str]):
+    """Добавляет аккаунты в пул (если ещё нет)."""
+    now = datetime.now().isoformat()
+    with get_conn() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO niche_accounts (username, discovered_at) VALUES (?, ?)",
+            [(u, now) for u in usernames]
+        )
+
+
+def get_niche_accounts(limit: int = 20, prefer_unscanned: bool = True) -> list[str]:
+    """
+    Возвращает случайную выборку из пула аккаунтов.
+    prefer_unscanned=True — сначала те кого давно не сканировали.
+    """
+    with get_conn() as conn:
+        if prefer_unscanned:
+            # Приоритет: ещё не сканировались, потом давно не сканировались
+            rows = conn.execute("""
+                SELECT username FROM niche_accounts
+                ORDER BY scan_count ASC, COALESCE(last_scanned, '0') ASC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT username FROM niche_accounts
+                ORDER BY RANDOM() LIMIT ?
+            """, (limit,)).fetchall()
+    return [r[0] for r in rows]
+
+
+def mark_account_scanned(username: str):
+    """Отмечает что аккаунт был просканирован."""
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE niche_accounts
+            SET last_scanned=?, scan_count=scan_count+1
+            WHERE username=?
+        """, (datetime.now().isoformat(), username))
+
+
+def get_niche_pool_size() -> int:
+    with get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) FROM niche_accounts").fetchone()[0]
 
 
 def get_stats(scan_id: int) -> dict:

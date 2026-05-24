@@ -162,23 +162,51 @@ async def _click_videos_tab(page):
     return False
 
 
+async def _click_latest_tab(page):
+    """
+    На странице хэштега кликает вкладку 'Новые' (Latest) чтобы
+    сортировать по дате, а не по популярности.
+    """
+    selectors = [
+        '[data-e2e="challenge-latest-tab"]',
+        'p:has-text("Latest")',
+        'p:has-text("Новые")',
+        'div[class*="Tab"]:has-text("Latest")',
+        'div[class*="Tab"]:has-text("Новые")',
+        'span:has-text("Latest")',
+    ]
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            if await el.is_visible(timeout=1500):
+                await el.click()
+                await asyncio.sleep(2.0)
+                logger.debug("Нажата вкладка Latest (новые видео)")
+                return True
+        except Exception:
+            pass
+    return False
+
+
 async def _scroll_and_collect(page, url: str, source: str,
                                target: int = 100, max_stale: int = 5,
                                cfg: dict = None,
-                               is_search: bool = False) -> list:
+                               is_search: bool = False,
+                               is_hashtag: bool = False,
+                               week_ago_ts: int = 0) -> list:
     """
     Открывает URL, скроллит пока не наберёт target видео.
-    is_search=True — дополнительно кликает по вкладке Videos.
+    is_search=True  — кликает вкладку Videos.
+    is_hashtag=True — кликает вкладку Latest (новые видео).
+    week_ago_ts     — если >0, ранняя остановка когда видео слишком старые.
     """
     captured = []
     seen_urls = set()
 
     async def on_response(response):
         u = response.url
-        # Проверяем URL паттерны
         if not any(k in u for k in API_PATTERNS):
             return
-        # Игнорируем не-JSON (картинки, css и т.д.)
         ct = response.headers.get("content-type", "")
         if "json" not in ct and "javascript" not in ct:
             return
@@ -199,21 +227,26 @@ async def _scroll_and_collect(page, url: str, source: str,
         await asyncio.sleep(random.uniform(2.0, 3.5))
         captcha_ok = await _wait_for_captcha(page, cfg)
         if not captcha_ok:
-            # Капча не решена (headless режим или ddddocr не справился) — пропускаем источник
             logger.warning(f"Капча не решена — пропускаю источник: {source}")
             return []
         await _close_popups(page)
 
         if is_search:
-            # Ждём загрузки поиска и кликаем Videos
             await asyncio.sleep(1.5)
             await _click_videos_tab(page)
             await asyncio.sleep(2.0)
+        elif is_hashtag:
+            # Переключаемся на "Latest" — видео отсортированы по дате публикации
+            await asyncio.sleep(1.5)
+            clicked = await _click_latest_tab(page)
+            if clicked:
+                await asyncio.sleep(2.0)
 
         stale = 0
-        for _ in range(60):  # увеличили с 30 до 60 итераций
+        old_streak = 0  # сколько подряд итераций видео только старые
+
+        for _ in range(60):
             prev = len(captured)
-            # Более агрессивный скролл — TikTok грузит следующую пачку только при большом сдвиге
             for _ in range(random.randint(3, 5)):
                 await page.mouse.wheel(0, random.randint(800, 1400))
                 await asyncio.sleep(random.uniform(0.5, 1.0))
@@ -221,16 +254,31 @@ async def _scroll_and_collect(page, url: str, source: str,
 
             if len(captured) >= target:
                 break
+
             if len(captured) == prev:
                 stale += 1
                 if stale == 3:
-                    # Пробуем резкий скролл вниз — иногда помогает разбудить TikTok
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await asyncio.sleep(3.0)
-                if stale >= 8:  # увеличили с 5 до 8
+                if stale >= 8:
                     break
             else:
                 stale = 0
+
+                # Ранняя остановка по дате: если в пачке нет свежих видео — стоп
+                if week_ago_ts > 0:
+                    new_batch = captured[prev:]
+                    with_ts = [v for v in new_batch if v.get("video_created_at", 0) > 0]
+                    if with_ts:
+                        recent = [v for v in with_ts if v["video_created_at"] >= week_ago_ts]
+                        if not recent:
+                            old_streak += 1
+                            logger.debug(f"  Пачка #{_}: все {len(with_ts)} видео старше {cfg.get('max_age_days', 7)} дн")
+                            if old_streak >= 2:
+                                logger.info(f"  Ранняя остановка: 2 пачки подряд без свежих видео")
+                                break
+                        else:
+                            old_streak = 0
 
     except Exception as e:
         logger.warning(f"Ошибка при загрузке {url}: {e}")
@@ -482,13 +530,38 @@ async def run_scan(cfg: dict,
         await context.storage_state(path=cfg["session_file"])
         log("✓ Сессия сохранена")
 
+        # ── 0. FYP + Explore — самый свежий сигнал ────────────────────────────
+        log(f"\n[0/4] FYP + Explore (что TikTok продвигает прямо сейчас)...")
+
+        fyp_sources = [
+            ("https://www.tiktok.com/foryou",  "fyp"),
+            ("https://www.tiktok.com/",         "fyp"),   # fallback
+            ("https://www.tiktok.com/explore",  "explore"),
+        ]
+        fyp_done = False
+        for fyp_url, fyp_src in fyp_sources:
+            if fyp_done:
+                break
+            log(f"  {fyp_url}...")
+            videos = await _scroll_and_collect(
+                page, fyp_url,
+                source=fyp_src, target=60, cfg=cfg,
+                week_ago_ts=week_ago_ts
+            )
+            new = add(videos)
+            log(f"  {fyp_src} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
+            if len(videos) > 5:
+                fyp_done = True
+            await asyncio.sleep(random.uniform(5, 10))
+
         # ── 1. Хэштеги ────────────────────────────────────────────────────────
-        log(f"\n[1/3] Хэштеги ({len(cfg['hashtags'])} штук)...")
+        log(f"\n[1/4] Хэштеги ({len(cfg['hashtags'])} штук) — режим Latest...")
         for tag in cfg["hashtags"]:
             log(f"  #{tag}...")
             videos = await _scroll_and_collect(
                 page, f"https://www.tiktok.com/tag/{tag}",
-                source=f"#{tag}", target=target, cfg=cfg
+                source=f"#{tag}", target=target, cfg=cfg,
+                is_hashtag=True, week_ago_ts=week_ago_ts
             )
             new = add(videos)
             log(f"  #{tag} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
@@ -497,31 +570,30 @@ async def run_scan(cfg: dict,
                 break
             await asyncio.sleep(random.uniform(8, 15))
 
-        # ── 2. Поиск ──────────────────────────────────────────────────────────
+        # ── 2. Поиск (с фильтром по дате — последняя неделя) ──────────────────
         if not blocked:
-            log(f"\n[2/3] Поиск ({len(cfg['search_queries'])} запросов)...")
+            log(f"\n[2/4] Поиск ({len(cfg['search_queries'])} запросов, за 7 дней)...")
             for query in cfg["search_queries"]:
                 log(f"  \"{query}\"...")
+                # publish_time=1 → неделя; TikTok поддерживает: 1=день, 7=неделя, 30=месяц
+                q = quote_plus(query)
                 search_url = (
-                    f"https://www.tiktok.com/search/video?q={quote_plus(query)}"
+                    f"https://www.tiktok.com/search/video?q={q}&publish_time=7"
                 )
                 videos = await _scroll_and_collect(
                     page, search_url,
                     source=f"search:{query}", target=target, cfg=cfg,
-                    is_search=True
+                    is_search=True, week_ago_ts=week_ago_ts
                 )
-                # Если нашли мало — пробуем второй формат
+                # Если нашли мало — пробуем без фильтра (старый формат)
                 if len(videos) < 3:
-                    log(f"  Мало результатов, пробую альтернативный URL...")
-                    alt_url = (
-                        f"https://www.tiktok.com/search?q={quote_plus(query)}&type=video"
-                    )
+                    log(f"  Мало результатов с фильтром, пробую без...")
+                    alt_url = f"https://www.tiktok.com/search?q={q}&type=video"
                     videos2 = await _scroll_and_collect(
                         page, alt_url,
                         source=f"search:{query}", target=target, cfg=cfg,
-                        is_search=True
+                        is_search=True, week_ago_ts=week_ago_ts
                     )
-                    videos = videos or videos2
                     if videos2:
                         videos = videos + [v for v in videos2 if v["url"] not in {x["url"] for x in videos}]
 
@@ -532,33 +604,140 @@ async def run_scan(cfg: dict,
                     break
                 await asyncio.sleep(random.uniform(10, 18))
 
-        # ── 3. Подписки seed-аккаунтов ────────────────────────────────────────
+        # ── 3. Related videos + динамические хэштеги ─────────────────────────
+        if not blocked and all_videos:
+            log(f"\n[3/4] Related videos + динамические хэштеги...")
+
+            # Топ-10 видео с лучшим score → ищем похожие
+            top_for_related = sorted(
+                [v for v in all_videos if v.get("video_created_at", 0) >= week_ago_ts or week_ago_ts == 0],
+                key=lambda x: x["score"], reverse=True
+            )[:10]
+
+            related_videos_all: list[dict] = []
+
+            async def _collect_related(vid_url: str, aweme_id: str) -> list:
+                """Получает related videos через API для одного видео."""
+                found = []
+                seen = set()
+
+                async def on_resp(response):
+                    if "related/item_list" in response.url or "recommend/item_list" in response.url:
+                        try:
+                            data = await response.json()
+                            items = _extract_items_from_response(data)
+                            for item in items:
+                                p = _parse_item(item, f"related:{aweme_id[:8]}")
+                                if p and p["url"] not in seen:
+                                    seen.add(p["url"])
+                                    found.append(p)
+                        except Exception:
+                            pass
+
+                page.on("response", on_resp)
+                try:
+                    await page.goto(vid_url, wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(2.5)
+                    # Скроллим немного — TikTok грузит related при скролле вниз
+                    await page.mouse.wheel(0, 1500)
+                    await asyncio.sleep(2.0)
+                except Exception:
+                    pass
+                page.remove_listener("response", on_resp)
+                return found
+
+            rel_count = 0
+            for v in top_for_related[:5]:  # максимум 5 видео чтобы не затягивать
+                vid_id = v["url"].split("/video/")[-1]
+                log(f"  Related для @{v['author']} (score={v['score']:.0f}x)...")
+                rel = await _collect_related(v["url"], vid_id)
+                new_rel = add(rel)
+                rel_count += new_rel
+                log(f"  → {len(rel)} related видео, {new_rel} новых")
+                await asyncio.sleep(random.uniform(5, 10))
+
+            log(f"  Related итого: +{rel_count} новых видео")
+
+            # Динамические хэштеги: извлекаем из описаний найденных видео
+            # TikTok API иногда возвращает desc с хэштегами, но чаще — нет
+            # Используем сами URL и author как сигналы для поиска по нику
+            dynamic_tags = set()
+            for v in top_for_related[:20]:
+                # Ищем авторов с высоким score — они часто используют актуальные теги
+                if v["score"] >= cfg.get("min_score", 10) * 5:
+                    # Сканируем профиль — его последние видео
+                    pass  # уже покрыто этапом аккаунтов
+
+            if dynamic_tags:
+                log(f"  Динамических хэштегов: {len(dynamic_tags)}")
+                for dtag in list(dynamic_tags)[:5]:
+                    log(f"  #{dtag} (динамический)...")
+                    videos = await _scroll_and_collect(
+                        page, f"https://www.tiktok.com/tag/{dtag}",
+                        source=f"#{dtag}", target=30, cfg=cfg,
+                        is_hashtag=True, week_ago_ts=week_ago_ts
+                    )
+                    new = add(videos)
+                    log(f"  #{dtag} → {len(videos)}, {new} новых (всего: {len(all_videos)})")
+                    await asyncio.sleep(random.uniform(8, 12))
+
+        # ── 4. Пул аккаунтов из ниши (растёт между сканами) ──────────────────
         if blocked:
             log("⛔ Скан остановлен досрочно — загрузи актуальную сессию TikTok через Настройки дашборда")
-        log(f"\n[3/3] Аккаунты из ниши..." if not blocked else "")
-        discovered: list[str] = []
+        else:
+            log(f"\n[4/4] Аккаунты из ниши...")
 
-        for acc in ([] if blocked else cfg["seed_accounts"]):
-            log(f"  @{acc} → подписки...")
+        # ── также добавляем авторов вирусных видео в пул ────────────────────
+        import database as db_mod
+        if not blocked and all_videos:
+            viral_authors = list({
+                v["author"] for v in all_videos
+                if v["score"] >= cfg.get("min_score", 10) * 3
+                and v["author"] not in cfg["seed_accounts"]
+            })
+            if viral_authors:
+                db_mod.add_niche_accounts(viral_authors)
+                log(f"  Добавлено {len(viral_authors)} вирусных авторов в пул")
+
+        # Сначала расширяем пул: берём подписки seed-аккаунтов и сохраняем
+        discovered_this_scan: list[str] = []
+        # Каждый раз идём только к одному рандомному seed-аккаунту (экономим время)
+        seed_to_expand = random.sample(
+            cfg["seed_accounts"],
+            min(2, len(cfg["seed_accounts"]))
+        ) if not blocked else []
+
+        for acc in seed_to_expand:
+            log(f"  @{acc} → собираю подписки для пула...")
             following = await _get_following(page, acc)
-            discovered.extend(following)
-            log(f"  @{acc} → {len(following)} подписок")
+            new_accs = [a for a in following if a not in cfg["seed_accounts"]]
+            db_mod.add_niche_accounts(new_accs)
+            discovered_this_scan.extend(new_accs)
+            log(f"  @{acc} → +{len(new_accs)} аккаунтов в пул")
             await asyncio.sleep(random.uniform(5, 10))
 
-        unique_accounts = list(dict.fromkeys(
-            a for a in discovered if a not in cfg["seed_accounts"]
-        ))[:10]
+        pool_size = db_mod.get_niche_pool_size()
+        log(f"  Пул аккаунтов: {pool_size} всего")
 
-        log(f"  Уникальных аккаунтов: {len(unique_accounts)}")
+        # Берём из пула тех кого давно не сканировали (или ещё не сканировали)
+        pool_accounts = db_mod.get_niche_accounts(limit=15, prefer_unscanned=True)
+        # + сами seed-аккаунты (всегда сканируем, но ищем только свежие видео)
+        all_accounts = cfg["seed_accounts"] + [a for a in pool_accounts if a not in cfg["seed_accounts"]]
 
-        for acc in ([] if blocked else cfg["seed_accounts"] + unique_accounts):
+        log(f"  Сканирую {len(all_accounts)} аккаунтов ({len(cfg['seed_accounts'])} seed + {len(pool_accounts)} из пула)...")
+
+        for acc in ([] if blocked else all_accounts):
             log(f"  @{acc}...")
             videos = await _scroll_and_collect(
                 page, f"https://www.tiktok.com/@{acc}",
-                source=f"account:{acc}", target=20, cfg=cfg
+                source=f"account:{acc}", target=25, cfg=cfg,
+                week_ago_ts=week_ago_ts  # останавливаемся когда видео становятся старыми
             )
             new = add(videos)
             log(f"  @{acc} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
+            # Помечаем как просканированный
+            if acc not in cfg["seed_accounts"]:
+                db_mod.mark_account_scanned(acc)
             await asyncio.sleep(random.uniform(8, 15))
 
         if browser:

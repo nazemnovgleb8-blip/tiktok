@@ -129,7 +129,7 @@ def run_full_scan(need_login: bool = False):
         }
 
         logger.info("▶ Отправляю дайджест в Telegram...")
-        send_daily_digest(enriched, scan_stats, cfg)
+        send_daily_digest(enriched, scan_stats, cfg, scan_id=scan_id)
 
         logger.info(f"══ Скан #{scan_id} завершён успешно ══")
 
@@ -361,7 +361,7 @@ def _run_analyze_only(cfg: dict):
             "ultra":          stats.get("ultra", 0) or 0,
         }
         check_and_send_alerts(enriched, cfg)
-        send_daily_digest(enriched, scan_stats, cfg)
+        send_daily_digest(enriched, scan_stats, cfg, scan_id=scan_id)
         logger.info("✅ Анализ и дайджест завершены!")
 
     except Exception as e:
