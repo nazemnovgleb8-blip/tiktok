@@ -304,6 +304,80 @@ async def _scroll_and_collect(page, url: str, source: str,
     return captured
 
 
+async def _collect_fyp(page, target: int, cfg: dict, week_ago_ts: int) -> list:
+    """
+    Собирает видео из FYP/Explore.
+    Навигация через клавишу ArrowDown — перелистывает вертикальную ленту.
+    """
+    captured = []
+    seen_urls = set()
+
+    async def on_response(response):
+        u = response.url
+        if not any(k in u for k in API_PATTERNS):
+            return
+        ct = response.headers.get("content-type", "")
+        if "json" not in ct and "javascript" not in ct:
+            return
+        try:
+            data = await response.json()
+            items = _extract_items_from_response(data)
+            for item in items:
+                parsed = _parse_item(item, "fyp")
+                if parsed and parsed["url"] not in seen_urls:
+                    seen_urls.add(parsed["url"])
+                    captured.append(parsed)
+        except Exception:
+            pass
+
+    page.on("response", on_response)
+    try:
+        await page.goto("https://www.tiktok.com/foryou",
+                        wait_until="domcontentloaded", timeout=35000)
+        await asyncio.sleep(random.uniform(2.5, 4.0))
+        await _wait_for_captcha(page, cfg)
+        await _close_popups(page)
+        await asyncio.sleep(2.0)
+
+        # Кликаем в центр страницы чтобы фокус был на видео
+        try:
+            await page.mouse.click(640, 400)
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
+        stale = 0
+        for _ in range(target * 3):  # максимум target*3 нажатий — точно хватит
+            prev = len(captured)
+            # ArrowDown — переход к следующему видео в ленте
+            await page.keyboard.press("ArrowDown")
+            await asyncio.sleep(random.uniform(1.2, 2.0))
+
+            if len(captured) >= target:
+                break
+
+            if len(captured) == prev:
+                stale += 1
+                if stale >= 5:
+                    # Попробуем ещё раз кликнуть и нажать Down
+                    await page.mouse.click(640, 400)
+                    await asyncio.sleep(0.5)
+                    await page.keyboard.press("ArrowDown")
+                    await asyncio.sleep(1.5)
+                if stale >= 15:
+                    logger.debug("FYP: 15 нажатий без новых видео — завершаю")
+                    break
+            else:
+                stale = 0
+
+    except Exception as e:
+        logger.warning(f"FYP: ошибка при сборе: {e}")
+    finally:
+        page.remove_listener("response", on_response)
+
+    return captured
+
+
 async def _get_following(page, username: str) -> list[str]:
     """Возвращает список аккаунтов на которые подписан username."""
     found = []
@@ -367,18 +441,19 @@ async def _build_context(p, cfg: dict) -> tuple:
     if sadcaptcha_key and not brightdata_cdp:
         logger.info("Запускаю браузер с SadCaptcha extension (авто-капча)...")
         try:
-            from tiktok_captcha_solver import make_playwright_solver_context
+            from tiktok_captcha_solver.launcher import make_async_playwright_solver_context
             import tempfile
 
             user_data_dir = profile_dir if (profile_dir and os.path.exists(profile_dir)) \
                 else tempfile.mkdtemp(prefix="tiktok_sad_")
 
-            # make_playwright_solver_context загружает extension и создаёт persistent context
-            context = make_playwright_solver_context(
+            # Async-версия: скачивает extension с GitHub, патчит API-ключ, запускает браузер
+            logger.info("SadCaptcha: скачиваю extension и запускаю браузер...")
+            context = await make_async_playwright_solver_context(
                 p, sadcaptcha_key,
+                user_data_dir=user_data_dir,
                 headless=headless,
                 args=launch_args,
-                user_data_dir=user_data_dir,
                 viewport={"width": 1280, "height": 800},
                 locale="ru-RU",
                 **({"proxy": proxy_cfg} if proxy_cfg else {}),
@@ -626,26 +701,11 @@ async def run_scan(cfg: dict,
         else:
             log(f"\n[0/4] FYP + Explore (что TikTok продвигает прямо сейчас)...")
 
-        fyp_sources = [
-            ("https://www.tiktok.com/foryou",  "fyp"),
-            ("https://www.tiktok.com/",         "fyp"),   # fallback
-            ("https://www.tiktok.com/explore",  "explore"),
-        ]
-        fyp_done = False
         if not test_mode:
-          for fyp_url, fyp_src in fyp_sources:
-            if fyp_done:
-                break
-            log(f"  {fyp_url}...")
-            videos = await _scroll_and_collect(
-                page, fyp_url,
-                source=fyp_src, target=100, cfg=cfg,
-                week_ago_ts=week_ago_ts
-            )
+            log(f"  https://www.tiktok.com/foryou (перелистывание ↓, цель: 50 видео)...")
+            videos = await _collect_fyp(page, target=50, cfg=cfg, week_ago_ts=week_ago_ts)
             new = add(videos)
-            log(f"  {fyp_src} → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
-            if len(videos) > 5:
-                fyp_done = True
+            log(f"  fyp → {len(videos)} получено, {new} новых (всего: {len(all_videos)})")
             await asyncio.sleep(random.uniform(5, 10))
 
         # ── 1. Хэштеги ────────────────────────────────────────────────────────
