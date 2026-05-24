@@ -500,125 +500,62 @@ SCAN_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
 
 # ── Настройки ─────────────────────────────────────────────────────────────────
 SETTINGS_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
+<style>
+details > summary { cursor:pointer; list-style:none; display:flex; align-items:center;
+  justify-content:space-between; padding:2px 0 }
+details > summary::-webkit-details-marker { display:none }
+details > summary::after { content:"▸"; font-size:13px; color:#aaa; transition:.15s }
+details[open] > summary::after { content:"▾" }
+details[open] > summary { margin-bottom:20px }
+.source-count {
+  display:inline-flex;align-items:center;justify-content:center;
+  background:#f0f0f0;color:#6e6e73;border-radius:20px;
+  font-size:12px;font-weight:600;padding:2px 9px;margin-left:8px
+}
+</style>
+
 <div class="page">
-  <h1>Настройки</h1>
-  <p class="subtitle">Управление источниками и интеграциями</p>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:32px">
+    <div>
+      <h1>Настройки</h1>
+      <p class="subtitle">Источники для скана · интеграции</p>
+    </div>
+  </div>
 
   {% if msg %}
   <div class="flash flash-{{ 'ok' if msg_type=='ok' else 'err' }}">{{ msg }}</div>
   {% endif %}
 
   <form method="post" action="/settings/save">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
 
-    <div class="section">
-      <h2>Telegram</h2>
-      <div class="form-row">
-        <label>Bot Token</label>
-        <input type="password" name="telegram_bot_token" value="{{ cfg.telegram_bot_token }}" placeholder="1234567890:AAA...">
-      </div>
-      <div class="form-row">
-        <label>Chat ID (группа команды)</label>
-        <input type="text" name="telegram_chat_id" value="{{ cfg.telegram_chat_id }}" placeholder="-100123456789">
-      </div>
-      <div class="form-row">
-        <label>Время дайджеста (час, 0–23)</label>
-        <input type="number" name="schedule_hour" value="{{ cfg.schedule_hour }}" min="0" max="23">
-      </div>
-      <div class="form-row">
-        <label>URL дашборда <span style="color:#6e6e73;font-size:11px">— вставь публичный адрес (Railway / ngrok) для ссылок в Telegram</span></label>
-        <input type="text" name="dashboard_url" value="{{ cfg.get('dashboard_url','') }}" placeholder="https://tiktok-production-xxxx.up.railway.app">
-      </div>
+  <!-- ═══ ИСТОЧНИКИ (наверху) ═══════════════════════════════════════════════ -->
+
+  <div class="section" style="margin-bottom:16px">
+    <div class="section-header" style="margin-bottom:16px">
+      <h2 style="margin:0">Хэштеги
+        <span class="source-count">{{ cfg.hashtags|length }}</span>
+      </h2>
+      <span style="font-size:12px;color:#aaa">Можно вставить несколько через пробел или запятую</span>
     </div>
-
-    <div class="section">
-      <h2>Gemini AI</h2>
-      <div class="form-row">
-        <label>API Key</label>
-        <input type="password" name="gemini_api_key" value="{{ cfg.gemini_api_key }}" placeholder="AIza...">
-      </div>
-      <div class="form-row">
-        <label>Анализировать топ-N видео</label>
-        <input type="number" name="gemini_top_n" value="{{ cfg.gemini_top_n }}" min="10" max="100">
-      </div>
-      <div class="form-row">
-        <label>Минимальный Score</label>
-        <input type="number" name="min_score" value="{{ cfg.min_score }}" min="5">
-      </div>
-      <div class="form-row">
-        <label>Минимальные просмотры в дайджест <span style="color:#6e6e73;font-size:11px">— видео с меньшим числом не попадут в Telegram</span></label>
-        <input type="number" name="min_views" value="{{ cfg.get('min_views', 50000) }}" min="0" step="1000">
-      </div>
-      <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
-        <label>CapSolver API Key <span style="color:#1a7a3c;font-size:11px">— $0.50 бесплатно</span></label>
-        <input type="password" name="capsolver_api_key" value="{{ cfg.get('capsolver_api_key','') }}" placeholder="CAP-xxxxxxxxxxxxxxxx">
-      </div>
-      <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
-        <label>Bright Data CDP URL <span style="color:#1a7a3c;font-size:11px">— удалённый браузер с авто-решением капч</span></label>
-        <input type="password" name="brightdata_cdp_url" value="{{ cfg.get('brightdata_cdp_url','') }}" placeholder="wss://brd-customer-...@brd.superproxy.io:9222">
-      </div>
-      <div class="form-row" style="margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0">
-        <label>Прокси <span style="color:#6e6e73;font-size:11px">— используется только если Bright Data не задан</span></label>
-        <input type="text" name="proxy" value="{{ cfg.get('proxy','') }}" placeholder="socks5://user:pass@host:port">
-      </div>
+    <div class="tag-list" id="tags-list">
+      {% for tag in cfg.hashtags %}
+      <span class="tag">#{{ tag }}<span class="tag-rm" onclick="removeTag(this,'hashtag','{{ tag }}')">×</span></span>
+      {% endfor %}
     </div>
-
+    <input type="hidden" name="hashtags" id="hashtags-input" value="{{ cfg.hashtags | join(',') }}">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input type="text" id="new-tag" placeholder="#brandtransformation #logoreveal #ИИ — вставь сразу несколько" style="flex:1">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addTag('hashtag')" style="flex-shrink:0">+ Добавить</button>
+    </div>
   </div>
 
-  <div class="section">
-    <h2>TikTok сессия</h2>
-    <p style="font-size:13px;color:#6e6e73;margin-bottom:16px">
-      Для работы на сервере (Railway) нужно загрузить файл сессии с Mac.<br>
-      На Mac запусти бота, залогинься — файл <code>tiktok_session.json</code> появится в папке проекта.
-    </p>
-    <form method="post" action="/upload-session" enctype="multipart/form-data"
-          style="display:flex;gap:12px;align-items:center">
-      <input type="file" name="session_file" accept=".json"
-             style="flex:1;border:1.5px dashed #d0d0d0;padding:10px;border-radius:12px;
-                    background:#fafafa;font-size:13px;cursor:pointer">
-      <button type="submit" class="btn btn-black" style="flex-shrink:0">Загрузить сессию</button>
-    </form>
-    {% if session_ok %}
-    <p style="margin-top:12px;font-size:13px;color:#1a7a3c">✓ Сессия активна</p>
-    {% else %}
-    <p style="margin-top:12px;font-size:13px;color:#c44f00">⚠ Сессия не найдена</p>
-    {% endif %}
-  </div>
-
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:0">
-
-    <div class="section">
-      <h2>Хэштеги</h2>
-      <div class="tag-list" id="tags-list">
-        {% for tag in cfg.hashtags %}
-        <span class="tag">#{{ tag }}<span class="tag-rm" onclick="removeTag(this,'hashtag','{{ tag }}')">×</span></span>
-        {% endfor %}
-      </div>
-      <input type="hidden" name="hashtags" id="hashtags-input" value="{{ cfg.hashtags | join(',') }}">
-      <div style="display:flex;gap:8px;margin-top:14px">
-        <input type="text" id="new-tag" placeholder="Добавить хэштег" style="flex:1">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="addTag('hashtag')" style="flex-shrink:0">+ Добавить</button>
-      </div>
+  <div class="section" style="margin-bottom:16px">
+    <div class="section-header" style="margin-bottom:16px">
+      <h2 style="margin:0">Поисковые запросы
+        <span class="source-count">{{ cfg.search_queries|length }}</span>
+      </h2>
+      <span style="font-size:12px;color:#aaa">Фраза целиком, как вводишь в строку TikTok</span>
     </div>
-
-    <div class="section">
-      <h2>Seed-аккаунты</h2>
-      <div class="tag-list" id="accounts-list">
-        {% for acc in cfg.seed_accounts %}
-        <span class="tag">@{{ acc }}<span class="tag-rm" onclick="removeTag(this,'account','{{ acc }}')">×</span></span>
-        {% endfor %}
-      </div>
-      <input type="hidden" name="seed_accounts" id="accounts-input" value="{{ cfg.seed_accounts | join(',') }}">
-      <div style="display:flex;gap:8px;margin-top:14px">
-        <input type="text" id="new-account" placeholder="Добавить аккаунт" style="flex:1">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="addTag('account')" style="flex-shrink:0">+ Добавить</button>
-      </div>
-    </div>
-
-  </div>
-
-  <div class="section">
-    <h2>Поисковые запросы</h2>
     <div class="tag-list" id="queries-list">
       {% for q in cfg.search_queries %}
       <span class="tag">{{ q }}<span class="tag-rm" onclick="removeTag(this,'query','{{ q }}')">×</span></span>
@@ -626,13 +563,126 @@ SETTINGS_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", """
     </div>
     <input type="hidden" name="search_queries" id="queries-input" value="{{ cfg.search_queries | join('||') }}">
     <div style="display:flex;gap:8px;margin-top:14px">
-      <input type="text" id="new-query" placeholder="Например: logo reveal" style="flex:1;max-width:400px">
+      <input type="text" id="new-query" placeholder="Например: logo reveal  или  AI website design" style="flex:1">
       <button type="button" class="btn btn-ghost btn-sm" onclick="addTag('query')" style="flex-shrink:0">+ Добавить</button>
     </div>
   </div>
 
-  <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:8px">
-    <button type="submit" class="btn btn-black">Сохранить настройки</button>
+  <div class="section" style="margin-bottom:24px">
+    <div class="section-header" style="margin-bottom:16px">
+      <h2 style="margin:0">Seed-аккаунты
+        <span class="source-count">{{ cfg.seed_accounts|length }}</span>
+      </h2>
+      <span style="font-size:12px;color:#aaa">Профили из ниши — сканируем их видео и подписки</span>
+    </div>
+    <div class="tag-list" id="accounts-list">
+      {% for acc in cfg.seed_accounts %}
+      <span class="tag">@{{ acc }}<span class="tag-rm" onclick="removeTag(this,'account','{{ acc }}')">×</span></span>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="seed_accounts" id="accounts-input" value="{{ cfg.seed_accounts | join(',') }}">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input type="text" id="new-account" placeholder="@iron_deluxe @kleneldesign1 — можно несколько" style="flex:1">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addTag('account')" style="flex-shrink:0">+ Добавить</button>
+    </div>
+  </div>
+
+  <!-- ═══ ИНТЕГРАЦИИ (свёрнуто) ════════════════════════════════════════════ -->
+
+  <div class="section" style="margin-bottom:16px">
+    <details>
+      <summary>
+        <h2 style="margin:0;font-size:17px">Telegram и Gemini</h2>
+      </summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+
+        <div>
+          <h2 style="margin-bottom:16px">Telegram</h2>
+          <div class="form-row">
+            <label>Bot Token</label>
+            <input type="password" name="telegram_bot_token" value="{{ cfg.telegram_bot_token }}" placeholder="1234567890:AAA...">
+          </div>
+          <div class="form-row">
+            <label>Chat ID</label>
+            <input type="text" name="telegram_chat_id" value="{{ cfg.telegram_chat_id }}" placeholder="-100123456789">
+          </div>
+          <div class="form-row">
+            <label>Время дайджеста (час 0–23)</label>
+            <input type="number" name="schedule_hour" value="{{ cfg.schedule_hour }}" min="0" max="23">
+          </div>
+          <div class="form-row">
+            <label>URL дашборда</label>
+            <input type="text" name="dashboard_url" value="{{ cfg.get('dashboard_url','') }}" placeholder="https://tiktok-production-xxxx.up.railway.app">
+          </div>
+        </div>
+
+        <div>
+          <h2 style="margin-bottom:16px">Gemini AI</h2>
+          <div class="form-row">
+            <label>API Key</label>
+            <input type="password" name="gemini_api_key" value="{{ cfg.gemini_api_key }}" placeholder="AIza...">
+          </div>
+          <div class="form-row">
+            <label>Анализировать топ-N видео</label>
+            <input type="number" name="gemini_top_n" value="{{ cfg.gemini_top_n }}" min="10" max="100">
+          </div>
+          <div class="form-row">
+            <label>Минимальный Score</label>
+            <input type="number" name="min_score" value="{{ cfg.min_score }}" min="5">
+          </div>
+          <div class="form-row">
+            <label>Минимум просмотров в дайджест</label>
+            <input type="number" name="min_views" value="{{ cfg.get('min_views', 50000) }}" min="0" step="1000">
+          </div>
+        </div>
+
+      </div>
+    </details>
+  </div>
+
+  <div class="section" style="margin-bottom:16px">
+    <details>
+      <summary>
+        <h2 style="margin:0;font-size:17px">Прокси и браузер</h2>
+      </summary>
+      <div class="form-row">
+        <label>Bright Data CDP URL <span style="color:#1a7a3c;font-size:11px">— удалённый браузер с авто-капчей</span></label>
+        <input type="password" name="brightdata_cdp_url" value="{{ cfg.get('brightdata_cdp_url','') }}" placeholder="wss://brd-customer-...@brd.superproxy.io:9222">
+      </div>
+      <div class="form-row">
+        <label>CapSolver API Key</label>
+        <input type="password" name="capsolver_api_key" value="{{ cfg.get('capsolver_api_key','') }}" placeholder="CAP-xxxxxxxxxxxxxxxx">
+      </div>
+      <div class="form-row">
+        <label>Прокси <span style="color:#6e6e73;font-size:11px">— если Bright Data не задан</span></label>
+        <input type="text" name="proxy" value="{{ cfg.get('proxy','') }}" placeholder="socks5://user:pass@host:port">
+      </div>
+    </details>
+  </div>
+
+  <div class="section" style="margin-bottom:24px">
+    <details>
+      <summary>
+        <h2 style="margin:0;font-size:17px">TikTok сессия
+          {% if session_ok %}<span style="font-size:12px;color:#1a7a3c;font-weight:500;margin-left:8px">✓ активна</span>
+          {% else %}<span style="font-size:12px;color:#c44f00;font-weight:500;margin-left:8px">⚠ не найдена</span>{% endif %}
+        </h2>
+      </summary>
+      <p style="font-size:13px;color:#6e6e73;margin-bottom:16px">
+        Загрузи <code>tiktok_session.json</code> для Railway — файл появится после первого локального входа.
+      </p>
+      <form method="post" action="/upload-session" enctype="multipart/form-data"
+            style="display:flex;gap:12px;align-items:center">
+        <input type="file" name="session_file" accept=".json"
+               style="flex:1;border:1.5px dashed #d0d0d0;padding:10px;border-radius:12px;
+                      background:#fafafa;font-size:13px;cursor:pointer">
+        <button type="submit" class="btn btn-black" style="flex-shrink:0">Загрузить</button>
+      </form>
+    </details>
+  </div>
+
+  <div style="display:flex;gap:12px;justify-content:flex-end">
+    <button type="submit" class="btn btn-orange">Сохранить</button>
   </div>
   </form>
 </div>
@@ -649,35 +699,38 @@ const sep    = {hashtag:',', account:',', query:'||'};
 
 function syncInput(type) {
   document.getElementById(inputs[type]).value = store[type].join(sep[type]);
+  // обновляем счётчик
+  const h = document.querySelector('h2 .source-count');
 }
 function addTag(type) {
   const id = type==='hashtag'?'new-tag':type==='account'?'new-account':'new-query';
   const inp = document.getElementById(id);
   const raw = inp.value.trim();
   if (!raw) return;
-
-  // Разбиваем по пробелам, запятым, переносам — поддержка вставки нескольких сразу
   const parts = raw.split(/[\s,\n]+/).map(s => s.replace(/^[#@]+/, '').trim()).filter(Boolean);
-
+  let added = 0;
   parts.forEach(function(val) {
     if (!val || store[type].includes(val)) return;
     store[type].push(val);
+    added++;
     const prefix = type==='hashtag'?'#':type==='account'?'@':'';
     const el = document.createElement('span');
     el.className='tag';
     el.innerHTML=prefix+val+'<span class="tag-rm" onclick="removeTag(this,\''+type+'\',\''+val+'\')">×</span>';
     document.getElementById(lists[type]).appendChild(el);
   });
-
   syncInput(type);
   inp.value='';
+  if (added) {
+    inp.style.borderColor='#1a7a3c';
+    setTimeout(()=>{ inp.style.borderColor=''; }, 600);
+  }
 }
 function removeTag(el, type, val) {
   store[type]=store[type].filter(x=>x!==val);
   el.parentElement.remove();
   syncInput(type);
 }
-// Enter key in tag inputs
 ['new-tag','new-account','new-query'].forEach(function(id){
   const el=document.getElementById(id);
   if(!el)return;
