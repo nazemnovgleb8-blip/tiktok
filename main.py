@@ -357,6 +357,14 @@ def main():
         _keep_alive()
         return
 
+    # ── На Railway — только дашборд, сканы запускаются локально ─────────────
+    is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT"))
+    if is_railway:
+        logger.info("Railway: режим дашборда — сканирование отключено (TikTok блокирует дата-центры)")
+        logger.info("Запускай сканы локально — данные синхронизируются на Railway автоматически")
+        _keep_alive()
+        return
+
     # ── Запускаем планировщик ─────────────────────────────────────────────
     scheduler = _start_scheduler(cfg)
 

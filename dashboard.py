@@ -367,7 +367,13 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
       <h1>Библиотека</h1>
       <p class="subtitle">Все уникальные видео за всё время · {{ stats.total or 0 }} роликов · {{ stats.authors or 0 }} авторов</p>
     </div>
-    <div style="display:flex;gap:10px">
+    <div style="display:flex;gap:10px;align-items:center">
+      {% if is_railway %}
+      <span style="font-size:13px;color:#c44f00;background:#fff5f0;border:1px solid #ffd0b0;
+                   padding:8px 14px;border-radius:10px">
+        ⚠ Сканы запускай локально — Railway заблокирован TikTok
+      </span>
+      {% else %}
       <form method="post" action="/run-test">
         <button class="btn btn-ghost" type="submit">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
@@ -380,6 +386,7 @@ HOME_HTML = BASE_HTML.replace("{% block body %}{% endblock %}", _VIDEO_TABLE + "
           Запустить скан
         </button>
       </form>
+      {% endif %}
     </div>
   </div>
 
