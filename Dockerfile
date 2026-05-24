@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
     libcairo2 libasound2 libx11-6 libxext6 \
     fonts-liberation fonts-noto-color-emoji \
+    libgl1-mesa-glx libglib2.0-0 libsm6 libxrender1 libxext6 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

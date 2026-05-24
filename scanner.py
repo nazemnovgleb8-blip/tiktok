@@ -132,9 +132,10 @@ async def _close_popups(page):
             pass
 
 
-async def _wait_for_captcha(page, cfg: dict = None):
+async def _wait_for_captcha(page, cfg: dict = None) -> bool:
+    """Возвращает True если капча решена (или её не было), False — если нет."""
     from captcha import handle_captcha
-    await handle_captcha(page, cfg or {})
+    return await handle_captcha(page, cfg or {})
 
 
 async def _click_videos_tab(page):
@@ -196,7 +197,11 @@ async def _scroll_and_collect(page, url: str, source: str,
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=35000)
         await asyncio.sleep(random.uniform(2.0, 3.5))
-        await _wait_for_captcha(page, cfg)
+        captcha_ok = await _wait_for_captcha(page, cfg)
+        if not captcha_ok:
+            # Капча не решена (headless режим или ddddocr не справился) — пропускаем источник
+            logger.warning(f"Капча не решена — пропускаю источник: {source}")
+            return []
         await _close_popups(page)
 
         if is_search:
@@ -206,18 +211,23 @@ async def _scroll_and_collect(page, url: str, source: str,
             await asyncio.sleep(2.0)
 
         stale = 0
-        for _ in range(30):
+        for _ in range(60):  # увеличили с 30 до 60 итераций
             prev = len(captured)
-            for _ in range(random.randint(2, 3)):
-                await page.mouse.wheel(0, random.randint(400, 700))
-                await asyncio.sleep(random.uniform(0.8, 1.5))
-            await asyncio.sleep(random.uniform(2.5, 4.5))
+            # Более агрессивный скролл — TikTok грузит следующую пачку только при большом сдвиге
+            for _ in range(random.randint(3, 5)):
+                await page.mouse.wheel(0, random.randint(800, 1400))
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+            await asyncio.sleep(random.uniform(3.0, 5.0))
 
             if len(captured) >= target:
                 break
             if len(captured) == prev:
                 stale += 1
-                if stale >= max_stale:
+                if stale == 3:
+                    # Пробуем резкий скролл вниз — иногда помогает разбудить TikTok
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(3.0)
+                if stale >= 8:  # увеличили с 5 до 8
                     break
             else:
                 stale = 0
@@ -426,28 +436,38 @@ async def run_scan(cfg: dict,
         await page.add_init_script(STEALTH_JS)
 
         # ── Проверка логина ────────────────────────────────────────────────────
+        home_loaded = False
         try:
             await page.goto("https://www.tiktok.com", wait_until="domcontentloaded",
                             timeout=60000)
+            home_loaded = True
         except Exception as e:
-            log(f"⚠️  TikTok не загрузился ({e}) — пробую продолжить...")
-        await asyncio.sleep(3)
-        await _wait_for_captcha(page)
+            log(f"⚠️  TikTok главная не загрузилась ({type(e).__name__}) — проверяю сессию по cookies...")
 
-        is_logged = await page.evaluate(
-            "() => document.cookie.includes('sessionid') || "
-            "!!document.querySelector('[data-e2e=\"profile-icon\"]')"
-        )
+        await asyncio.sleep(2)
+
+        # Проверяем логин: по cookies (работает даже без загрузки страницы) или по DOM
+        try:
+            is_logged = await page.evaluate(
+                "() => document.cookie.includes('sessionid') || "
+                "!!document.querySelector('[data-e2e=\"profile-icon\"]')"
+            )
+        except Exception:
+            is_logged = False
 
         if not is_logged:
             if _is_headless():
-                log("⛔ Сессия устарела или отсутствует — скан отменён.")
-                log("   Загрузи актуальный tiktok_session.json через Настройки дашборда.")
-                if browser:
-                    await browser.close()
+                if not home_loaded:
+                    # Страница не загрузилась — сессия неизвестна, пробуем сканировать
+                    log("⚠️  Не удалось проверить сессию (таймаут) — пробую сканировать...")
                 else:
-                    await context.close()
-                return [], []
+                    # Страница загрузилась, но не залогинен
+                    log("⛔ Сессия устарела — скан отменён. Загрузи tiktok_session.json через Настройки.")
+                    if browser:
+                        await browser.close()
+                    else:
+                        await context.close()
+                    return [], []
             else:
                 log("⚠️  Сессия устарела — залогинься в браузере и нажми Enter.")
                 input("    → Enter после логина... ")
