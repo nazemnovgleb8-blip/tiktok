@@ -887,7 +887,8 @@ def scan_detail(scan_id):
         if not scan:
             return redirect(url_for("history"))
         stats  = db.get_stats(scan_id)
-        videos = db.get_scan_videos(scan_id, limit=300)
+        # История скана — только нужная выборка (passed_filter=1)
+        videos = db.get_scan_videos(scan_id, limit=300, only_filtered=True)
         if cat and cat != "all":
             videos = [v for v in videos if v.get("category") == cat]
         return render_template_string(SCAN_HTML,

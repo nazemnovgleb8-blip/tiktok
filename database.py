@@ -54,15 +54,12 @@ def init():
         # Добавляем колонки если их нет (миграция старых БД)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
         migrations = [
-            ("category",        "TEXT DEFAULT 'вирал'"),
-            ("gemini_why_viral", "TEXT DEFAULT ''"),
-            ("gemini_priority",  "TEXT DEFAULT 'средний'"),
-        ]
-        migrations = [
             ("category",          "TEXT DEFAULT 'вирал'"),
             ("gemini_why_viral",  "TEXT DEFAULT ''"),
             ("gemini_priority",   "TEXT DEFAULT 'средний'"),
             ("video_created_at",  "INTEGER DEFAULT 0"),
+            # passed_filter=1 — прошло порог score и попало в «нужную выборку» скана
+            ("passed_filter",     "INTEGER DEFAULT 1"),
         ]
         for col, coldef in migrations:
             if col not in existing:
@@ -128,20 +125,27 @@ def fail_scan(scan_id: int, error: str):
         )
 
 
-def save_videos(scan_id: int, videos: list[dict]):
+def save_videos(scan_id: int, videos: list[dict], passed_filter: bool = True):
+    """
+    Сохраняет видео в БД.
+    passed_filter=True  — «нужная выборка» (прошли score-фильтр), показывается в скане.
+    passed_filter=False — все собранные, показывается только в Библиотеке.
+    """
     now = datetime.now().isoformat()
+    pf  = 1 if passed_filter else 0
     with get_conn() as conn:
         conn.executemany(
             """INSERT OR IGNORE INTO videos
                (scan_id, url, author, source, views, followers, score,
-                created_at, video_created_at)
+                created_at, video_created_at, passed_filter)
                VALUES (:scan_id, :url, :author, :source, :views, :followers, :score,
-                       :created_at, :video_created_at)""",
+                       :created_at, :video_created_at, :passed_filter)""",
             [{
                 **v,
                 "scan_id":          scan_id,
                 "created_at":       now,
                 "video_created_at": v.get("video_created_at", 0),
+                "passed_filter":    pf,
             } for v in videos]
         )
 
@@ -195,11 +199,17 @@ def get_all_videos_stats() -> dict:
     return dict(row) if row else {}
 
 
-def get_scan_videos(scan_id: int, limit: int = 500) -> list:
+def get_scan_videos(scan_id: int, limit: int = 500, only_filtered: bool = False) -> list:
+    """
+    only_filtered=True  → только видео из «нужной выборки» (для страницы скана в истории).
+    only_filtered=False → все видео скана (для Gemini-анализа и синхронизации).
+    """
     with get_conn() as conn:
+        where = "scan_id=?"
+        if only_filtered:
+            where += " AND passed_filter=1"
         rows = conn.execute(
-            """SELECT * FROM videos WHERE scan_id=?
-               ORDER BY score DESC LIMIT ?""",
+            f"SELECT * FROM videos WHERE {where} ORDER BY score DESC LIMIT ?",
             (scan_id, limit)
         ).fetchall()
     return [dict(r) for r in rows]

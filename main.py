@@ -94,7 +94,11 @@ def run_test_scan():
             db.finish_scan(scan_id, len(all_videos), 0)
             return
 
-        db.save_videos(scan_id, filtered)
+        filtered_urls = {v["url"] for v in filtered}
+        not_filtered  = [v for v in all_videos if v["url"] not in filtered_urls]
+        if not_filtered:
+            db.save_videos(scan_id, not_filtered, passed_filter=False)
+        db.save_videos(scan_id, filtered, passed_filter=True)
 
         # Gemini топ-3
         from analyzer import analyze_videos
@@ -161,13 +165,21 @@ def run_full_scan(need_login: bool = False):
             f"Score≥{cfg.get('min_score', 50)}x: {len(filtered)}"
         )
 
+        # ── 2. Сохраняем ВСЕ собранные видео в БД ─────────────────────────
+        # passed_filter=False — все сырые данные → видны в Библиотеке
+        # passed_filter=True  — прошли score-фильтр → видны в скане истории
+        filtered_urls = {v["url"] for v in filtered}
+        not_filtered  = [v for v in all_videos if v["url"] not in filtered_urls]
+
+        if not_filtered:
+            db.save_videos(scan_id, not_filtered, passed_filter=False)
+        if filtered:
+            db.save_videos(scan_id, filtered, passed_filter=True)
+
         if not filtered:
             logger.warning("Нет видео прошедших фильтр — скан завершён без отправки")
             db.finish_scan(scan_id, len(all_videos), 0)
             return
-
-        # ── 2. Сохраняем сырые данные в БД ────────────────────────────────
-        db.save_videos(scan_id, filtered)
 
         # ── 3. Gemini-анализ топ-N ─────────────────────────────────────────
         from analyzer import analyze_videos
