@@ -13,6 +13,7 @@ main.py — Alta Viral Scanner
 import argparse
 import asyncio
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -27,13 +28,17 @@ import dashboard
 import tunnel
 
 # ── Логирование ────────────────────────────────────────────────────────────────
+# RotatingFileHandler: макс 5 МБ на файл, 3 резервные копии — лог не растёт бесконечно
+_log_handler = logging.handlers.RotatingFileHandler(
+    "alta_scanner.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(name)-14s  %(levelname)s  %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("alta_scanner.log", encoding="utf-8"),
+        _log_handler,
     ]
 )
 logger = logging.getLogger("main")
@@ -132,6 +137,9 @@ def run_full_scan(need_login: bool = False):
         send_daily_digest(enriched, scan_stats, cfg, scan_id=scan_id)
 
         logger.info(f"══ Скан #{scan_id} завершён успешно ══")
+
+        # Очистка временных файлов (скрины, trace и т.п.)
+        _cleanup_temp_files()
 
         # Синхронизируем данные на Railway (только локально)
         if not os.environ.get("RAILWAY_ENVIRONMENT"):
@@ -371,6 +379,30 @@ def _run_analyze_only(cfg: dict):
 
     except Exception as e:
         logger.exception(f"Ошибка анализа: {e}")
+
+
+def _cleanup_temp_files():
+    """Удаляет временные файлы Playwright (HAR, trace, скриншоты) после скана."""
+    import glob, shutil
+    dir_ = os.path.dirname(os.path.abspath(__file__))
+    patterns = [
+        os.path.join(dir_, "*.png"),
+        os.path.join(dir_, "*.jpg"),
+        os.path.join(dir_, "*.jpeg"),
+        os.path.join(dir_, "trace.zip"),
+        os.path.join(dir_, "*.har"),
+    ]
+    removed = 0
+    for pat in patterns:
+        for f in glob.glob(pat):
+            try:
+                os.remove(f)
+                removed += 1
+                logger.debug(f"Удалён временный файл: {f}")
+            except Exception:
+                pass
+    if removed:
+        logger.info(f"🧹 Очищено временных файлов: {removed}")
 
 
 def _sync_to_remote(scan_id: int, cfg: dict):
