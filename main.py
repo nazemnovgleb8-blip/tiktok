@@ -133,8 +133,9 @@ def run_full_scan(need_login: bool = False):
 
         logger.info(f"══ Скан #{scan_id} завершён успешно ══")
 
-        # Авто-пуш в GitHub (только локально, не на Railway)
+        # Синхронизируем данные на Railway (только локально)
         if not os.environ.get("RAILWAY_ENVIRONMENT"):
+            _sync_to_remote(scan_id, cfg)
             _git_push()
 
     except Exception as e:
@@ -370,6 +371,50 @@ def _run_analyze_only(cfg: dict):
 
     except Exception as e:
         logger.exception(f"Ошибка анализа: {e}")
+
+
+def _sync_to_remote(scan_id: int, cfg: dict):
+    """
+    Отправляет данные завершённого скана на Railway (POST /api/ingest).
+    Запускается только локально — на Railway синхронизация не нужна.
+    """
+    import requests as req_lib
+
+    dashboard_url = cfg.get("dashboard_url", "").strip().rstrip("/")
+    if not dashboard_url or "localhost" in dashboard_url:
+        logger.debug("Синхронизация: dashboard_url не задан или локальный — пропускаю")
+        return
+
+    sync_token = cfg.get("sync_token", "").strip()
+
+    try:
+        scan   = db.get_scan_by_id(scan_id)
+        if not scan:
+            logger.warning(f"Синхронизация: скан #{scan_id} не найден в БД")
+            return
+
+        videos = db.get_scan_videos(scan_id, limit=500)
+
+        headers = {"Content-Type": "application/json"}
+        if sync_token:
+            headers["Authorization"] = f"Bearer {sync_token}"
+
+        resp = req_lib.post(
+            f"{dashboard_url}/api/ingest",
+            json={"scan": scan, "videos": videos},
+            headers=headers,
+            timeout=60,
+        )
+        if resp.ok:
+            data = resp.json()
+            logger.info(
+                f"✅ Синхронизация на Railway: "
+                f"скан #{data.get('scan_id')}, {data.get('videos')} видео → {dashboard_url}"
+            )
+        else:
+            logger.warning(f"Синхронизация не удалась: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Ошибка синхронизации: {e}")
 
 
 def _git_push():

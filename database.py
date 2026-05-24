@@ -88,6 +88,19 @@ def init():
         """)
 
 
+def create_scan_from_remote(started_at: str, finished_at: str,
+                            total_scraped: int, total_relevant: int) -> int:
+    """Создаёт запись скана с переданными timestamps (для синхронизации от локалки)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO scans
+               (started_at, finished_at, total_scraped, total_relevant, status)
+               VALUES (?, ?, ?, ?, 'done')""",
+            (started_at, finished_at, total_scraped, total_relevant)
+        )
+        return cur.lastrowid
+
+
 def start_scan() -> int:
     with get_conn() as conn:
         cur = conn.execute(

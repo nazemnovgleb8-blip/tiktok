@@ -842,6 +842,62 @@ def api_status():
     return jsonify(scan or {})
 
 
+@app.route("/api/ingest", methods=["POST"])
+def api_ingest():
+    """
+    Принимает данные скана от локальной копии и сохраняет в Railway БД.
+    Используется для синхронизации: локалка → Railway.
+    Защищён токеном из config.json → sync_token.
+    """
+    cfg = cfg_module.load()
+    expected = cfg.get("sync_token", "").strip()
+    if expected:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {expected}":
+            return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        payload    = request.get_json(force=True)
+        scan_data  = payload.get("scan", {})
+        videos     = payload.get("videos", [])
+
+        if not videos:
+            return jsonify({"ok": True, "scan_id": None, "videos": 0,
+                            "msg": "Нет видео — ничего не сохранено"})
+
+        # Создаём скан с оригинальными timestamps от локалки
+        from datetime import datetime as _dt
+        scan_id = db.create_scan_from_remote(
+            started_at    = scan_data.get("started_at",  _dt.now().isoformat()),
+            finished_at   = scan_data.get("finished_at", _dt.now().isoformat()),
+            total_scraped = scan_data.get("total_scraped",  0),
+            total_relevant= scan_data.get("total_relevant", len(videos)),
+        )
+
+        # Сохраняем видео (INSERT OR IGNORE — не дублируем по URL)
+        db.save_videos(scan_id, videos)
+
+        # Обновляем Gemini-поля по URL
+        for v in videos:
+            if v.get("gemini_hook") or v.get("gemini_adaptation"):
+                db.update_gemini(
+                    url        = v["url"],
+                    relevance  = v.get("gemini_relevance", 0),
+                    hook       = v.get("gemini_hook", ""),
+                    adaptation = v.get("gemini_adaptation", ""),
+                    category   = v.get("category", "вирал"),
+                    why_viral  = v.get("gemini_why_viral", ""),
+                    priority   = v.get("gemini_priority", "средний"),
+                )
+
+        logger.info(f"[ingest] Синхронизировано: скан #{scan_id}, {len(videos)} видео")
+        return jsonify({"ok": True, "scan_id": scan_id, "videos": len(videos)})
+
+    except Exception as e:
+        logger.exception(f"[ingest] Ошибка: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def start(scan_cb=None, host="127.0.0.1", port=5001):
     global _scan_callback
     _scan_callback = scan_cb

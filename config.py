@@ -119,6 +119,7 @@ def load() -> dict:
         "DASHBOARD_URL":       "dashboard_url",
         "MIN_SCORE":           "min_score",
         "MIN_VIEWS":           "min_views",
+        "SYNC_TOKEN":          "sync_token",
     }
     for env_key, cfg_key in _env_map.items():
         val = os.environ.get(env_key, "").strip()
